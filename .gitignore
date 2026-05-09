@@ -15,3 +15,6 @@ outputs/report_ai.md
 
 # Analyzed bugs tracking (generated at runtime)
 black_screen_data/analyzed_bugs.json
+
+# Large reference files (push separately if needed)
+knowledge/
