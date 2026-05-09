@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>黑卡闪问题分析工作流 — 架构全景图</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117;
+    --card: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --orange: #d2991d;
+    --red: #f85149;
+    --purple: #a371f7;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    line-height: 1.6;
+    padding: 24px;
+  }
+  .container { max-width: 1200px; margin: 0 auto; }
+  h1 {
+    font-size: 28px;
+    color: var(--accent);
+    margin-bottom: 8px;
+    border-bottom: 2px solid var(--border);
+    padding-bottom: 12px;
+  }
+  h2 {
+    font-size: 20px;
+    color: var(--purple);
+    margin: 40px 0 16px;
+  }
+  .subtitle {
+    color: #8b949e;
+    font-size: 14px;
+    margin-bottom: 32px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+    margin-bottom: 32px;
+  }
+  .card h3 {
+    font-size: 16px;
+    color: var(--accent);
+    margin-bottom: 16px;
+  }
+  .mermaid {
+    display: flex;
+    justify-content: center;
+    overflow-x: auto;
+  }
+  .legend {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+    font-size: 13px;
+    color: #8b949e;
+  }
+  .legend span { display: flex; align-items: center; gap: 6px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .dot.green { background: var(--green); }
+  .dot.orange { background: var(--orange); }
+  .dot.red { background: var(--red); }
+  .dot.blue { background: var(--accent); }
+  .dot.purple { background: var(--purple); }
+
+  .dual { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  @media (max-width: 900px) { .dual { grid-template-columns: 1fr; } }
+
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .stat-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    text-align: center;
+  }
+  .stat-card .num { font-size: 32px; font-weight: 700; }
+  .stat-card .label { font-size: 13px; color: #8b949e; margin-top: 4px; }
+  .stat-card .num.green { color: var(--green); }
+  .stat-card .num.blue { color: var(--accent); }
+  .stat-card .num.orange { color: var(--orange); }
+  .stat-card .num.purple { color: var(--purple); }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>黑卡闪问题自动化分析工作流</h1>
+<p class="subtitle">D:\my_crew | CrewAI 双工作流 + 闭环知识库 | v1.2 | 2026-05-09</p>
+
+<!-- ===== 1. 系统分层架构 ===== -->
+<h2>一、系统分层架构</h2>
+
+<div class="card">
+<div class="mermaid">
+graph TB
+    subgraph 表现层["🎯 表现层"]
+        CLI["CLI 入口<br/>uv run refine | download | full"]
+        CRON["定时触发<br/>每30分钟轮询<br/>(Phase 5)"]
+    end
+
+    subgraph 编排层["🧠 CrewAI 编排层"]
+        direction LR
+        W1["工作流一 Crew<br/>refinement_crew()<br/>3 Agents → 顺序"]
+        W2["工作流二 Crew<br/>download_analysis_crew()<br/>5 Agents → 顺序"]
+    end
+
+    subgraph 工具层["🔧 工具层 (Tools)"]
+        direction LR
+        T1["ExcelIssueTool<br/>Excel解析+分类"]
+        T2["BugKnowledgeTool<br/>知识库读写"]
+        T3["LogDownloadTool<br/>NAS下载"]
+        T4["LogAnalyzer<br/>日志分析<br/>(待实现)"]
+    end
+
+    subgraph 数据层["💾 数据层"]
+        direction LR
+        D1[("Excel<br/>Bug_*.xlsx")]
+        D2[("NAS<br/>日志存储")]
+        D3[("本地缓存<br/>T1Q黑卡闪/")]
+        D4[("知识库<br/>analyzed_bugs.json")]
+    end
+
+    CLI --> W1
+    CLI --> W2
+    CRON -.-> W1
+    CRON -.-> W2
+    W1 --> T1
+    W1 --> T2
+    W2 --> T2
+    W2 --> T3
+    W2 --> T4
+    T1 --> D1
+    T2 --> D4
+    T3 --> D2
+    T3 --> D3
+    T4 --> D3
+
+    style 表现层 fill:#1a1a2e,stroke:#a371f7
+    style 编排层 fill:#16213e,stroke:#58a6ff
+    style 工具层 fill:#0f3460,stroke:#3fb950
+    style 数据层 fill:#1a1a2e,stroke:#d2991d
+</div>
+</div>
+
+<!-- ===== 2. 闭环数据流 ===== -->
+<h2>二、闭环数据流</h2>
+
+<div class="card">
+<div class="mermaid">
+flowchart LR
+    A["📥 用户导出Excel<br/>Trinity → Bug_*.xlsx"] --> B{"🔍 增量过滤<br/>BugKnowledgeTool"}
+    B -->|新增/变更| C["🆕 需分析"]
+    B -->|状态未变| SKIP["⏭️ 跳过<br/>已分析过"]
+
+    C --> D["工作流一<br/>分类提炼"]
+    C --> E["工作流二<br/>下载+分析"]
+
+    D --> KB[("📚 analyzed_bugs.json<br/>知识库")]
+    E --> KB
+
+    KB -->|写入| META["_meta 自动计算"]
+    META --> TREND["📊 趋势报告"]
+    META --> HEAT["🔥 模块热力图"]
+
+    TREND --> FEED["📋 正向设计参考"]
+    HEAT --> FEED
+
+    KB -.->|下次导入| B
+
+    style A fill:#1a1a2e,stroke:#58a6ff,color:#c9d1d9
+    style KB fill:#0f3460,stroke:#3fb950,color:#c9d1d9
+    style FEED fill:#1a1a2e,stroke:#a371f7,color:#c9d1d9
+    style TREND fill:#16213e,stroke:#d2991d,color:#c9d1d9
+    style HEAT fill:#16213e,stroke:#d2991d,color:#c9d1d9
+</div>
+
+<div class="legend">
+  <span><span class="dot green"></span> 每次运行自动累积</span>
+  <span><span class="dot blue"></span> 工作流一输出</span>
+  <span><span class="dot orange"></span> 工作流二输出</span>
+  <span><span class="dot purple"></span> 正向设计输入</span>
+</div>
+</div>
+
+<!-- ===== 3. 双工作流 Agent/Task ===== -->
+<h2>三、双工作流详细编排</h2>
+
+<div class="dual">
+  <div class="card">
+    <h3>工作流一：问题分析提炼</h3>
+    <div class="mermaid">
+    graph TD
+      T1["📋 Task 1: data_analysis_task<br/>Agent: data_analyst<br/>工具: ExcelIssueTool + BugKnowledgeTool"]
+      T2["📝 Task 2: issue_refinement_task<br/>Agent: issue_refiner<br/>输出: 三章结构化报告"]
+      T3["📄 Task 3: report_task<br/>Agent: report_writer<br/>输出: 五段式报告 + 经验 + 总结"]
+
+      T1 -->|结构化摘要| T2
+      T2 -->|三章内容| T3
+      T3 -->|"outputs/report_refined.md"| OUT["📁 报告输出"]
+      T3 -->|"写入 category, fix_status"| KB[("analyzed_bugs.json")]
+
+      style T1 fill:#0f3460,stroke:#58a6ff
+      style T2 fill:#0f3460,stroke:#d2991d
+      style T3 fill:#0f3460,stroke:#3fb950
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>工作流二：Analysis问题下载分析</h3>
+    <div class="mermaid">
+    graph TD
+      D1["📥 Task 1: download_logs_task<br/>Agent: log_downloader<br/>工具: LogDownloadTool + BugKnowledgeTool"]
+      D2["🔌 Task 2: analyze_mcu_task<br/>Agent: log_analyzer_mcu<br/>分析: MCU 电源/SPI/功能安全"]
+      D3["💻 Task 3: analyze_qnx_task<br/>Agent: log_analyzer_qnx<br/>分析: SAIL/Kernel/emac"]
+      D4["📱 Task 4: analyze_android_task<br/>Agent: log_analyzer_android<br/>分析: ANR/Crash/SurfaceFlinger"]
+      D5["📤 Task 5: publish_report_task<br/>Agent: report_publisher<br/>输出: 日志分析报告"]
+
+      D1 -->|日志就绪| D2
+      D2 -->|MCU无异常| D3
+      D2 -->|MCU定位根因| D5
+      D3 -->|QNX无异常| D4
+      D3 -->|QNX定位根因| D5
+      D4 -->|Android定位根因| D5
+      D5 -->|"reports/{bug_id}_analysis.md"| OUT2["📁 报告输出"]
+      D5 -->|"写入 root_cause, confidence"| KB2[("analyzed_bugs.json")]
+
+      style D1 fill:#0f3460,stroke:#58a6ff
+      style D2 fill:#16213e,stroke:#f85149
+      style D3 fill:#16213e,stroke:#d2991d
+      style D4 fill:#16213e,stroke:#3fb950
+      style D5 fill:#0f3460,stroke:#a371f7
+    </div>
+  </div>
+</div>
+
+<!-- ===== 4. 增量过滤逻辑 ===== -->
+<h2>四、增量过滤逻辑</h2>
+
+<div class="card">
+<div class="mermaid">
+flowchart TD
+    START["📥 新 Excel 导入<br/>Bug_YYYYMMDD.xlsx"] --> READ["读取所有行<br/>提取 Bug ID + Status"]
+    READ --> LOOP{"逐条检查<br/>analyzed_bugs.json"}
+
+    LOOP -->|"Bug ID 不在知识库"| NEW["🆕 标记为 NEW<br/>首次分析"]
+    LOOP -->|"Bug ID 存在<br/>Status 相同"| SKIP["⏭️ 标记为 SKIPPED<br/>已分析过，跳过"]
+    LOOP -->|"Bug ID 存在<br/>Status 变化"| CHG["🔄 标记为 CHANGED<br/>重新分析"]
+
+    NEW --> REPORT["汇总过滤结果"]
+    SKIP --> REPORT
+    CHG --> REPORT
+
+    REPORT --> STATS["输出统计:<br/>Total / New / Changed / Skipped"]
+    STATS --> FEED["反馈到 Task<br/>description 中"]
+</div>
+
+<div class="stats-grid">
+  <div class="stat-card">
+    <div class="num green">89</div>
+    <div class="label">当前文件总数</div>
+  </div>
+  <div class="stat-card">
+    <div class="num blue">84</div>
+    <div class="label">新增(待分析)</div>
+  </div>
+  <div class="stat-card">
+    <div class="num orange">0</div>
+    <div class="label">状态变更(重分析)</div>
+  </div>
+  <div class="stat-card">
+    <div class="num purple">5</div>
+    <div class="label">跳过(已分析)</div>
+  </div>
+</div>
+</div>
+
+<!-- ===== 5. 日志分层分析链 ===== -->
+<h2>五、日志三层分析链</h2>
+
+<div class="card">
+<div class="mermaid">
+flowchart LR
+    subgraph 输入["📥 输入"]
+        LOG["日志目录<br/>T1Q黑卡闪/{BugID}/"]
+        CTX["问题上下文<br/>时间戳 / 标题 / 版本"]
+    end
+
+    subgraph MCU["🔌 MCU 层分析"]
+        direction TB
+        M1["检查 pshold 信号<br/>是否拉低？"]
+        M2["检查 SPI 心跳<br/>5501/80 是否缺失？"]
+        M3["检查功能安全事件<br/>safety fault？"]
+        M4["检查电源状态<br/>电压/电流异常？"]
+        M1 --> M2 --> M3 --> M4
+    end
+
+    subgraph QNX["💻 QNX 层分析"]
+        direction TB
+        Q1["SAIL 75ms 超时？"]
+        Q2["IDPS/Kernel crash？"]
+        Q3["emac/io-sock 异常？"]
+        Q4["NOC Error/DDR 错误？"]
+        Q1 --> Q2 --> Q3 --> Q4
+    end
+
+    subgraph Android["📱 Android 层分析"]
+        direction TB
+        A1["ANR traces？"]
+        A2["Native Crash tombstone？"]
+        A3["SurfaceFlinger FD泄漏？"]
+        A4["Observer/内存泄漏？"]
+        A5["PAG/动画库异常？"]
+        A1 --> A2 --> A3 --> A4 --> A5
+    end
+
+    subgraph 输出["📤 输出"]
+        R["根因结论 + 置信度<br/>+ 定位层次<br/>+ 关键证据"]
+    end
+
+    LOG --> MCU
+    CTX --> MCU
+    MCU -->|"发现根因 ✅"| R
+    MCU -->|"MCU层正常 →"| QNX
+    QNX -->|"发现根因 ✅"| R
+    QNX -->|"QNX层正常 →"| Android
+    Android -->|"综合分析"| R
+
+    style MCU fill:#16213e,stroke:#f85149
+    style QNX fill:#16213e,stroke:#d2991d
+    style Android fill:#16213e,stroke:#3fb950
+    style R fill:#0f3460,stroke:#a371f7
+</div>
+</div>
+
+<!-- ===== 6. 知识库演进 ===== -->
+<h2>六、知识库随迭代演进</h2>
+
+<div class="card">
+<div class="mermaid">
+graph TD
+    subgraph R1["第1次运行: Bug_0508.xlsx (449条)"]
+        R1A["初次全量分析<br/>分类 · 状态 · 模块"]
+    end
+
+    subgraph R2["第2次运行: Bug_0509.xlsx (89条)"]
+        R2A["增量:<br/>+0 新增, +89 跳过"]
+    end
+
+    subgraph R3["第N次运行: Bug_MMDD.xlsx"]
+        R3A["增量过滤<br/>新问题 + 状态变更"]
+    end
+
+    subgraph KB["📚 知识库积累"]
+        K1["第1次: 449条基线分类"]
+        K2["第2次: 5条深度分析"]
+        K3["第N次: 累计趋势数据"]
+        K1 --> K2 --> K3
+    end
+
+    subgraph OUTPUT["📊 正向设计输出"]
+        O1["领域收敛趋势<br/>SAIL ↓收敛<br/>内存 → 需关注"]
+        O2["模块热力图<br/>QNX:23 Android:36"]
+        O3["设计建议<br/>QNX心跳容错加强<br/>Android KASAN集成CI"]
+    end
+
+    R1 --> R1A --> K1
+    R2 --> R2A --> K2
+    R3 --> R3A --> K3
+    K3 --> O1
+    K3 --> O2
+    K3 --> O3
+
+    style R1 fill:#1a1a2e,stroke:#58a6ff
+    style R2 fill:#1a1a2e,stroke:#58a6ff
+    style R3 fill:#1a1a2e,stroke:#58a6ff
+    style KB fill:#0f3460,stroke:#3fb950
+    style OUTPUT fill:#16213e,stroke:#a371f7
+</div>
+</div>
+
+<!-- ===== 7. 状态机 ===== -->
+<h2>七、单条问题生命周期</h2>
+
+<div class="card">
+<div class="mermaid">
+stateDiagram-v2
+    [*] --> 导入: Trinity导出Excel
+    导入 --> 增量过滤: BugKnowledgeTool
+    增量过滤 --> 待分类: 新增/变更
+    增量过滤 --> 已跳过: 状态未变
+    待分类 --> 已分类: 工作流一
+    已分类 --> 待分析: status=Analysis
+    已分类 --> 已关闭: status≠Analysis
+    待分析 --> 下载日志: 工作流二:download
+    下载日志 --> 日志就绪: 权限OK
+    下载日志 --> 无权限: 权限不足
+    日志就绪 --> MCU分析: 工作流二:mcu
+    MCU分析 --> 根因定位: 发现根因
+    MCU分析 --> QNX分析: MCU层正常
+    QNX分析 --> 根因定位: 发现根因
+    QNX分析 --> Android分析: QNX层正常
+    Android分析 --> 根因定位: 综合分析
+    根因定位 --> 报告发布: 工作流二:publish
+    报告发布 --> [*]: 知识库更新
+    已跳过 --> [*]
+    无权限 --> [*]
+    已关闭 --> [*]
+</div>
+</div>
+
+<!-- ===== 8. 项目文件结构 ===== -->
+<h2>八、项目文件结构</h2>
+
+<div class="card">
+<div class="mermaid">
+graph TD
+    ROOT["D:\\my_crew\\"] --> SRC["src/my_crew/"]
+    ROOT --> DATA["black_screen_data/"]
+    ROOT --> LOGS["T1Q黑卡闪问题分析/"]
+    ROOT --> OUT["outputs/"]
+    ROOT --> REPORTS["reports/"]
+    ROOT --> DOCS["docs/"]
+    ROOT --> SCRIPTS["scripts/"]
+
+    SRC --> CONFIG["config/"]
+    SRC --> TOOLS["tools/"]
+    SRC --> CREW["crew.py"]
+    SRC --> MAIN["main.py"]
+
+    CONFIG --> AGENTS["agents.yaml<br/>8个Agent定义"]
+    CONFIG --> TASKS["tasks.yaml<br/>8个Task定义"]
+
+    TOOLS --> T1["excel_issue_tool.py"]
+    TOOLS --> T2["bug_knowledge_tool.py"]
+    TOOLS --> T3["log_download_tool.py"]
+
+    DATA --> EXCEL["Bug_*.xlsx"]
+    DATA --> KB["analyzed_bugs.json"]
+
+    LOGS --> L1["BUG001_xxx/"]
+    LOGS --> L2["BUG002_xxx/"]
+
+    DOCS --> ARCH["architecture.md"]
+
+    style ROOT fill:#1a1a2e,stroke:#a371f7,color:#c9d1d9
+    style KB fill:#0f3460,stroke:#3fb950,color:#c9d1d9
+</div>
+</div>
+
+</div>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      primaryColor: '#1f6feb',
+      primaryTextColor: '#c9d1d9',
+      primaryBorderColor: '#30363d',
+      lineColor: '#58a6ff',
+      secondaryColor: '#161b22',
+      tertiaryColor: '#0d1117',
+    },
+    flowchart: { useMaxWidth: true, htmlLabels: true },
+    sequence: { useMaxWidth: true },
+  });
+</script>
+</body>
+</html>

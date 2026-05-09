@@ -1,6 +1,9 @@
+# ── 工作流一：问题分析提炼 ──
 data_analysis_task:
   description: >
     使用 Excel Issue Analyzer 工具读取 {excel_path}。
+    注意：使用 BugTracker 工具过滤，只分析 {new_count} 条未分析过的新问题和
+    状态变更的问题，跳过 {skipped_count} 条已分析且状态未变的问题。
     输出必须包含：
     1. 字段映射（自动识别每个标准字段对应的 Excel 列名）
     2. 数据总量、字段缺失统计
@@ -67,6 +70,7 @@ report_task:
 
     > 数据来源：{excel_path}
     > 状态说明：Closed=已关闭/已验证 | Test=修复后待验证 | Postpone=挂起(依赖外部/无法复现)
+    > 增量模式：本次新分析 {new_count} 条，跳过已分析 {skipped_count} 条
 
     ---
 
@@ -87,20 +91,6 @@ report_task:
     - P3：单一 Bug 但根因典型 → 可选
     经验格式：### 经验N：标题\n- **现象：**\n- **痛点/根因：**\n- **建议：**
 
-    以下经验可参考（根据实际数据判断是否适用）：
-    1. 系统异常进9008
-    2. 系统异常进900E
-    3. SAIL/safetymonitor 是最大单点风险
-    4. gcore 抓取不完整阻塞分析
-    5. 功能安全心跳握手容错设计不足
-    6. 三方代码共板风险
-    7. 电源/环境因素排除
-    8. 应用层→系统层传导链
-    9. SPI/MCU 复位码解析
-    10. 偶现问题验证策略
-    11. IDPS 模块早期风险
-    12. 日志完整性
-
     ## 五、总结
     | 维度 | 结论 |
     |------|------|
@@ -120,3 +110,127 @@ report_task:
   expected_output: >
     Markdown 格式的完整《黑卡闪问题提炼分析报告》，符合上述五段式结构。
   agent: report_writer
+  output_file: outputs/report_refined.md
+
+# ── 工作流二：Analysis 状态问题下载分析 ──
+download_logs_task:
+  description: >
+    从 Excel 中筛选 status=Analysis 的问题（使用 BugTracker 过滤已下载过的）。
+    对每个问题：
+    1. 从 Actual Result 列提取日志 NAS 路径
+    2. 使用 LogDownloadTool 检查权限并下载
+    3. 无权限的记录下来，不阻塞流程
+
+    输出格式：
+    ```
+    ## 日志下载结果
+
+    | Bug ID | 标题 | 状态 | 文件数 |
+    |--------|------|------|--------|
+    | BUG-xxx | ... | ✅ 已下载 | 185 |
+    | BUG-yyy | ... | ❌ 无权限 | - |
+    ```
+
+    下载到 T1Q黑卡闪问题分析/{BugID}_{问题描述}/ 目录。
+  expected_output: >
+    下载结果汇总表 + 各问题下载状态。下载完成后列出所有本地日志目录的路径。
+  agent: log_downloader
+
+analyze_mcu_task:
+  description: >
+    分析已下载日志的 MCU 层（mcu/、mcu_security/、vehicle_spi_log/ 目录）。
+
+    检查项：
+    - pshold 是否被拉低（pshold=0 → MCU 触发复位）
+    - SPI 通信心跳消息 5501/80 是否缺失
+    - MCU 功能安全事件（safety fault）
+    - 电源状态异常
+
+    如果发现明确的根因 → 直接输出结论，标注 layer=MCU，不需要后续 QNX/Android 分析。
+    如果 MCU 层正常 → 输出"MCU 层未发现异常，继续 QNX 分析"。
+  expected_output: >
+    MCU 层分析结果：发现的问题 / 或 "未发现异常"。如果发现根因则给出结论和置信度。
+  agent: log_analyzer_mcu
+
+analyze_qnx_task:
+  description: >
+    分析已下载日志的 QNX 层（qnx/、qnx_security/、kernellog/ 目录）。
+    仅在 MCU 层未发现根因时执行。
+
+    检查项：
+    - SAIL/safetymonitor 75ms 响应超时
+    - IDPS/Kernel crash 事件
+    - emac/io-sock 驱动异常（寻找 io-sock.cor 文件）
+    - NOC Error / DDR 错误
+    - 系统启动时序异常
+
+    如果发现明确的根因 → 直接输出结论，标注 layer=QNX。
+    如果 QNX 层正常 → 输出"QNX 层未发现异常，继续 Android 分析"。
+  expected_output: >
+    QNX 层分析结果：发现的问题 / 或 "未发现异常"。如果发现根因则给出结论和置信度。
+  agent: log_analyzer_qnx
+
+analyze_android_task:
+  description: >
+    分析已下载日志的 Android 层（logcat/、anr/、tombstones/ 目录）。
+    仅在 MCU 和 QNX 层均未发现根因时执行。
+
+    检查项：
+    - ANR traces → 哪个组件超时
+    - Native Crash tombstones → signal + backtrace
+    - SurfaceFlinger 异常（Too many open files → FD 泄漏）
+    - Java Crash（FATAL EXCEPTION、NullPointerException）
+    - ContentObserver 泄漏
+    - PAG/动画库异常
+    - 应用进程 freeze/冻结
+
+    综合 MCU/QNX/Android 三层分析结果，给出最终根因推断和置信度。
+  expected_output: >
+    Android 层分析结果 + 三层次综合分析结论（含置信度：高/中/低）。
+  agent: log_analyzer_android
+
+publish_report_task:
+  description: >
+    汇总所有分析结果，生成 Markdown 格式的分析报告。
+
+    报告模板：
+    ```
+    # 黑卡闪问题日志分析报告
+
+    ## 基本信息
+    - Bug ID: {bug_id}
+    - 标题: {title}
+    - 负责人: {assignee}
+    - 问题时间: {timestamp}
+
+    ## 分析结论
+    - 根因分类: {category}
+    - 根因描述: {root_cause}
+    - 置信度: {confidence}（高/中/低）
+    - 定位层次: {layer}（MCU/QNX/Android）
+
+    ## 分层分析详情
+    ### MCU 层
+    {mcu_findings}
+
+    ### QNX 层
+    {qnx_findings}
+
+    ### Android 层
+    {android_findings}
+
+    ## 关键证据
+    {evidence}
+
+    ## 建议对策
+    {recommendations}
+
+    ## 待确认事项
+    {open_items}
+    ```
+
+    报告保存到 reports/{bug_id}_analysis.md。
+  expected_output: >
+    完整的分析报告 Markdown 文件路径。
+  agent: report_publisher
+  output_file: reports/{bug_id}_analysis.md

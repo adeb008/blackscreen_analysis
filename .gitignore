@@ -1,3 +1,17 @@
 .env
 __pycache__/
 .DS_Store
+*.pyc
+.venv/
+
+# Temp files
+~$*
+
+# Large log downloads (GB级)
+T1Q黑卡闪问题分析/
+
+# Outputs with old data
+outputs/report_ai.md
+
+# Analyzed bugs tracking (generated at runtime)
+black_screen_data/analyzed_bugs.json

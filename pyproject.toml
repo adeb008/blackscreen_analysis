@@ -11,6 +11,9 @@ dependencies = [
 [project.scripts]
 my_crew = "my_crew.main:run"
 run_crew = "my_crew.main:run"
+refine = "my_crew.main:refine"
+download = "my_crew.main:download"
+full = "my_crew.main:full"
 train = "my_crew.main:train"
 replay = "my_crew.main:replay"
 test = "my_crew.main:test"
