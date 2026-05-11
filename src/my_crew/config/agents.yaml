@@ -49,8 +49,6 @@ log_downloader:
     知道如何处理 Windows UNC 路径。你会逐个处理问题，遇到无权限的情况
     记录下来继续下一个，不会因为单个问题卡住整个流程。
     下载的日志以 BugID_问题描述 格式命名目录。
-  tools:
-    - log_download_tool
 
 log_analyzer_mcu:
   role: >
