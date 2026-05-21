@@ -10,8 +10,9 @@ from typing import Any
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from my_crew.config import get_kb_path
 
-TRACKING_FILE = Path("D:/my_crew/black_screen_data/analyzed_bugs.json")
+TRACKING_FILE = get_kb_path()
 
 
 class BugTrackerInput(BaseModel):

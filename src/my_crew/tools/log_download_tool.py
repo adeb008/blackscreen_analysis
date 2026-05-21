@@ -12,8 +12,9 @@ from typing import Any
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from my_crew.config import get_project_root
 
-LOG_DIR = Path("D:/my_crew/T1Q黑卡闪问题分析")
+LOG_DIR = get_project_root() / "T1Q黑卡闪问题分析"
 
 
 class LogDownloadInput(BaseModel):

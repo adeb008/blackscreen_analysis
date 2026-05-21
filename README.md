@@ -1,105 +1,86 @@
-# 黑卡闪问题提炼分析 CrewAI 工作流
+# 黑卡闪问题智能分析系统
 
-基于《黑卡闪问题提炼分析》的标准报告格式，实现从 Bug Excel 到结构化分析报告的自动流水线。
+> CrewAI 多 Agent 工作流：Excel 导出 → 25 类分类 → LLM 精校 → 经验提炼 → 完整报告 → Obsidian 同步
 
-## 工作流
-
-```
-Bug Excel (.xlsx)
-       │
-       ▼
-┌──────────────────────────────────────────────────────┐
-│  Agent 1: 数据工程师 (data_analyst)                    │
-│  └─ 工具: ExcelIssueAnalyzer                          │
-│  └─ 输出: 结构化摘要 (字段映射/分布/根因分类/交叉统计)    │
-│                                                        │
-│  Agent 2: 提炼专家 (issue_refiner)                     │
-│  └─ 输出: 报告前三章                                   │
-│     ├── 一、已修复的问题及原因 (按8个根因大类分组)        │
-│     ├── 二、未修复/挂起的问题 (卡点分析)                 │
-│     └── 三、核心问题分类统计 (分布+占比)                │
-│                                                        │
-│  Agent 3: 报告撰写员 (report_writer)                   │
-│  └─ 输出: 完整五段式报告                               │
-│     ├── 四、需要提炼的经验点 (P0-P4层级+10条经验模式)    │
-│     └── 五、总结 (收敛/风险/建议)                      │
-└──────────────────────────────────────────────────────┘
-       │
-       ▼
-outputs/report.md  ← 标准格式《黑卡闪问题提炼分析报告》
-```
-
-## 使用方法
+## 🚀 三步跑起来
 
 ```bash
-# 安装依赖
-pip install crewai openpyxl
+# 1. 克隆
+git clone <repo-url>
+cd my_crew
+uv sync
 
-# 运行（默认使用 black_screen_data/ 下的测试数据）
-crewai run
+# 2. 配置 API Key
+cp .env.example .env
+# 编辑 .env，填入你的 DeepSeek API Key
 
-# 指定自定义 Excel 路径
-python -m my_crew.main "D:/bugs/黑卡闪Bug清单.xlsx"
+# 3. 丢 Bug Excel 到 black_screen_data/
+# 文件命名: Bug_*.xlsx（Trinity 导出）
+
+# 运行！
+uv run python -c "from my_crew.main import refine_complete; refine_complete()"
 ```
 
-## 根因分类体系（11类）
+## 📊 产出物
 
-工具自动按关键词匹配归类：
+运行后 `outputs/` 目录：
 
-| 根因大类 | 归属章节 | 关键词示例 |
-|---------|---------|-----------|
-| SAIL/safetymonitor 异常类 | 已修复 | safetymonitor, SAIL, 75ms, ramdump |
-| IDPS / QNX Kernel Crash | 已修复 | idps, nidps, kernel crash |
-| 心跳/握手/通信异常 | 已修复 | SPI, 握手, 0x80, 心跳 |
-| 内存问题类 | 已修复 | 内存, memory, kasan |
-| Android 应用层问题 | 已修复 | surfaceflinger, ANR, watchdog |
-| 电源/供电问题 | 已修复 | 电源, 供电, 电流 |
-| 软件配置/升级问题 | 已修复 | 升级, 回滚, 共板 |
-| NOC Error/DDR/900E | 未修复 | NOC error, DDR, 900E |
-| io-sock/emac 驱动 | 未修复 | io-sock, emac |
-| 测试手法/环境问题 | 已修复 | 台架, 高温, 水冷 |
-| 无法复现/日志不全 | 统计 | 无法复现, 日志不全 |
+| 文件 | 说明 |
+|------|------|
+| `report_refined_complete.md` | 五段式分析报告 + 完整 Bug 清单附录 |
+| `classification_data.json` | 结构化分类数据 |
+| `classification_dashboard.html` | 交互式看板（搜索/筛选/CSV） |
+| `trend_heatmap_report.html` | 趋势折线图 + 模块热力图 |
+| `keywords_override.json` | LLM 自学习关键词 |
 
-## 输出报告结构
-
-```markdown
-# 黑卡闪问题提炼分析
-
-## 一、已修复的问题及原因
-### 1. SAIL/safetymonitor 异常类
-| Bug ID | 问题现象 | 根因 | 修复方式 |
-### 2. IDPS / QNX Kernel Crash 类
-...
-
-## 二、未修复/挂起的问题
-| Bug ID | 状态 | 问题现象 | 当前卡点 |
-
-## 三、核心问题分类统计
-| 根因大类 | 数量 | 占比 | 处理状态 |
-
-## 四、需要提炼的经验点
-### 经验1：xxx
-- **现象：**
-- **痛点：**
-- **建议：**
-
-## 五、总结
-| 维度 | 结论 |
-
-## 项目结构
+## 📁 项目结构
 
 ```
 my_crew/
 ├── src/my_crew/
-│   ├── crew.py              # Crew 编排（3 agents × 3 tasks）
-│   ├── main.py              # CLI 入口
-│   ├── config/
-│   │   ├── agents.yaml      # Agent 角色定义
-│   │   └── tasks.yaml       # Task 描述和输出格式
-│   └── tools/
-│       └── excel_issue_tool.py  # Excel 读取 + 根因分类
-├── black_screen_data/       # 测试数据
-├── outputs/
-│   └── report.md            # 输出报告
-└── pyproject.toml
+│   ├── config/          ← Agent/Task YAML 配置
+│   ├── tools/           ← 分类引擎 + 知识库 + 日志工具
+│   ├── crew.py          ← 3 Agent + 2 Crew
+│   ├── main.py          ← 入口（refine / download / full）
+│   ├── models.py        ← 25 类分类规则
+│   └── config.py        ← 路径配置（自动检测）
+├── scripts/             ← 后处理脚本
+├── black_screen_data/   ← Bug Excel + 知识库
+├── outputs/             ← 产物输出
+├── docs/                ← 架构文档
+├── .env.example         ← 环境变量模板
+├── pyproject.toml       ← Python 项目配置
+├── SKILL.md             ← Hermes/OpenClaw Agent Skill
+└── README.md
 ```
+
+## 🛠 前置条件
+
+- Python 3.10+ / [uv](https://github.com/astral-sh/uv)
+- DeepSeek API Key（`.env` 配置）
+- Excel 文件（`Bug_*.xlsx`，Trinity 导出）
+- Windows / Linux / macOS 均可
+
+## 📖 详细文档
+
+- 架构设计：[docs/architecture.md](docs/architecture.md)
+- 架构图：[outputs/diagram_master_architecture.html](outputs/diagram_master_architecture.html)
+- Agent 产出物：[docs/agent_output_artifacts.md](docs/agent_output_artifacts.md)
+
+## 🤖 Hermes/OpenClaw Agent Skill
+
+本项目附带 `SKILL.md`，可以直接加载到 Hermes 或 OpenClaw 中：
+
+```
+/skill black-screen-analysis
+```
+
+## ⚙️ 配置说明
+
+| 环境变量 | 必需 | 默认值 |
+|---------|:----:|------|
+| `DEEPSEEK_ANTHROPIC_API_KEY` | ✅ | - |
+| `DEEPSEEK_MODEL` | - | deepseek-v4-flash |
+| `PROJECT_ROOT` | - | 自动检测 pyproject.toml 所在目录 |
+| `OBSIDIAN_VAULT_PATH` | - | - |
+| `NAS_MOUNT_PATH` | - | NAS 默认路径 |

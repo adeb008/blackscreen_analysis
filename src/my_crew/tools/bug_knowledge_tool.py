@@ -39,11 +39,14 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 
+from pathlib import Path
+
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from my_crew.config import get_kb_path
 
-TRACKING_FILE = Path("D:/my_crew/black_screen_data/analyzed_bugs.json")
+TRACKING_FILE = get_kb_path()
 
 
 class BugKnowledgeInput(BaseModel):
@@ -176,10 +179,35 @@ def save_kb(kb: dict):
     TRACKING_FILE.parent.mkdir(parents=True, exist_ok=True)
     # 更新元信息
     bugs = kb.get("bugs", {})
-    kb["_meta"]["last_run"] = now()
+    now_str = now()
+    kb["_meta"]["last_run"] = now_str
     kb["_meta"]["total_analyzed"] = len(bugs)
     # 计算趋势
     kb["_meta"].update(compute_trends(kb))
+    
+    # 历史归档：本轮快照（供趋势图使用）
+    snapshot = {
+        "timestamp": now_str,
+        "total": len(bugs),
+        "categories": dict(sorted(Counter(
+            b.get("category", "未分类") for b in bugs.values()
+        ).items(), key=lambda x: -x[1])),
+        "modules": dict(sorted(Counter(
+            b.get("module", "未知") for b in bugs.values()
+        ).items(), key=lambda x: -x[1])[:20]),
+        "fix_status": dict(Counter(
+            b.get("fix_status", "未知") for b in bugs.values()
+        ).most_common()),
+        "severity": dict(Counter(
+            b.get("severity", "未知") for b in bugs.values()
+        ).most_common()),
+    }
+    history = kb["_meta"].setdefault("run_history", [])
+    history.append(snapshot)
+    # 保留最近 50 轮
+    if len(history) > 50:
+        kb["_meta"]["run_history"] = history[-50:]
+    
     TRACKING_FILE.write_text(
         json.dumps(kb, ensure_ascii=False, indent=2),
         encoding="utf-8",

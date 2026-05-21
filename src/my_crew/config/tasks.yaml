@@ -1,38 +1,71 @@
 # ── 工作流一：问题分析提炼 ──
 data_analysis_task:
   description: >
-    使用 Excel Issue Analyzer 工具读取 {excel_path}。
-    注意：使用 BugTracker 工具过滤，只分析 {new_count} 条未分析过的新问题和
-    状态变更的问题，跳过 {skipped_count} 条已分析且状态未变的问题。
+    使用 Excel Issue Analyzer 工具读取 {excel_path}，传参：
+    - tracking_file=black_screen_data/analyzed_bugs.json（知识库自动回写，相对路径）
+    - json_output=outputs/classification_data.json（结构化分类数据，供下游 Agent 精确引用）
+
+    **增量模式（重要）:**
+    本次增量过滤：新增 {new_count} 条、状态变更 {changed_count} 条、已分析跳过 {skipped_count} 条。
+    - 工具会自动分类全部 {total_count} 条（获取完整统计），但你的**分析重点**应放在新增和变更的问题上
+    - 已分析的 {skipped_count} 条只更新统计数字（分布/交叉表），不要逐条重新详述
+
     输出必须包含：
-    1. 字段映射（自动识别每个标准字段对应的 Excel 列名）
+    1. 字段映射（自动识别每个标准字段对应的 Excel 列名，含 Solved Scheme / Actual Result）
     2. 数据总量、字段缺失统计
     3. Status / Severity / Module / Frequency 分布
-    4. 根因分类统计（按 11 类规则自动归类：SAIL/safetymonitor、IDPS、心跳握手、
-       内存问题、Android应用层、电源供电、软件配置、NOC Error/DDR、io-sock/emac、
-       测试环境、无法复现）
+    4. 25类细粒度根因分类统计（ExcelIssueTool 内置加权分类引擎自动完成，
+       覆盖应用crash/QNX/硬件/系统/环境/场景六大领域，详见 models.py 的 CATEGORY_DEFINITIONS）
     5. 修复状态分组（已修复 / 未修复/挂起 / 无法复现）
-    6. 各根因大类下的完整 Bug 清单（Bug ID、标题、根因、修复方式、状态、关联Case标签）
+    6. 各根因大类下 Bug 清单（每类最多展示前 15 条为例，全量见 classification_data.json）
     7. Module x Severity / Module x 根因分类 / 根因分类 x 修复状态 交叉统计
     8. 典型 Bug 样例
-    9. 给后续 Agent 的分析提示
+    9. 给后续 Agent 的分析提示（含方案B精校指引）
   expected_output: >
     一份结构化 Markdown 摘要，包含上述所有字段和分析结果。每条 Bug 必须带 _root_cause_category
-    （根因分类）和 _fix_status（修复状态）标签。
+    （25类细粒度根因分类）和 _fix_status（修复状态）标签。
   agent: data_analyst
+  output_file: outputs/data_analysis_summary.md
 
 issue_refinement_task:
   description: >
-    基于 data_analyst 的结构化摘要，整理出标准报告的前三章。
+    基于 data_analyst 的结构化摘要，做两件事：
 
-    ## 第一章：已修复的问题及原因
-    按根因大类分组，每组的表格格式为：
+    **增量模式（重要）:**
+    本次增量过滤：新增 {new_count} 条、状态变更 {changed_count} 条、已分析跳过 {skipped_count} 条。
+    - 【第一部分】LLM 精校：只精校新增和状态变更的问题，已分析的 {skipped_count} 条保持原有分类不变
+    - 【第二部分】报告前三章：第一章和第二章聚焦新增+变更的问题详情，已分析的只更新统计汇总
+
+    【第一部分：LLM 二次精校分类（方案B）】
+    逐条审核 data_analyst 输出的 `_root_cause_category` 分类结果，判断是否需要修正。
+    **只审核新增的 {new_count} 条和状态变更的 {changed_count} 条**，已分析的 {skipped_count} 条不需要重新精校。
+    精确分类数据见 `outputs/classification_data.json`（每条 Bug 的 root_cause_category、matched_keywords、
+    parsed_root_cause、fix_status 等结构化字段，避免从 Markdown 推测）。
+    25类细粒度分类完整定义见 models.py 的 CATEGORY_DEFINITIONS，共26条（含"其他/待分类"）。
+    命中关键词见 ExcelIssueTool 内置加权规则引擎。
+
+    精校原则：
+    - 如果工具分类正确 → 确认保留
+    - 如果工具分类错误（如"不是SAIL问题"被误分到SAIL类）→ 纠正
+    - 如果原分类太粗、有更细的合适分类 → 细化
+    - 如果原分类是"需人工判断"但有明确线索 → 给出合理分类
+    - 每条给出置信度（高/中/低）和判断依据原文片段
+    - 低置信度的标注"建议人工复核"
+
+    【第二部分：整理标准报告前三章】
+    基于精校后的分类结果，整理出标准报告的前三章。
+
+    ## 第一章：已修复的问题及原因（精校后分类）
+    ## 第一章：已修复的问题及原因（精校后分类）
+    按根因大类分组，下表展示每个分类下状态为 Closed/Test/Release/Review 等已关闭的问题。
+    每个分组下**必须列出该分类所有已修复Bug的完整表格**（不允许省略、不允许仅列典型样例、不允许"见XXX"引用）。
+    每组的表格格式为：
     | Bug ID | 问题现象 | 根因 | 修复方式 |
     分组顺序：
     1. 系统异常进9008（高通底层，影响范围最大）
     2. 系统异常进900E（系统异常，影响范围最大）
     3. 产生gcore
-    4. SAIL/safetymonitor 异常类（高通底层，影响范围最大）
+    4. SAIL/safetymonitor 异常类
     5. IDPS / QNX Kernel Crash 类
     6. 心跳/握手/通信异常类
     7. DDR/UFS/内存问题类
@@ -42,26 +75,71 @@ issue_refinement_task:
     11. 软件配置/升级问题
     12. 其他已修复（不属于以上大类的零散已修复 Bug）
 
-    ## 第二章：未修复/挂起的问题
-    表格格式为：
+    ## 第二章：未修复/挂起的问题（精校后分类）
     | Bug ID | 状态 | 问题现象 | 当前卡点 |
+    每组的 Bug 清单表格（最多展示该分类前 15 条为例，全量由后处理脚本生成）。
     需区分 Postpone（挂起）和 Test（实际依赖外部未关闭）。
     每个卡点需说明阻塞原因（如依赖高通、日志不全、需特殊环境等）。
 
-    ## 第三章：核心问题分类统计
+    ## 新增章节一：待分析问题（Analysis 状态）
+    这些 Bug 状态为 Analysis，正在分析中，无最终结论。
+    **必须全部列出这些 Bug**（数量少所以不限制为前 15 条）。
+    表格格式：
+    | Bug ID | 问题现象 | 分类 | 分析进展/当前状态 |
+    并在表格后标注："> 这些问题适合作为工作流二的输入，下载对应日志进行分层分析"
+    
+    ## 新增章节二：待确认问题（Confirm 状态）
+    这些 Bug 状态为 Confirm，修复方案已提交但仍在确认中，无最终结论。
+    **必须全部列出这些 Bug**。
+    表格格式：
+    | Bug ID | 问题现象 | 分类 | 待确认事项 |
+
+    ## 第三章：核心问题分类统计（精校后分类）
     表格格式为：
     | 根因大类 | 数量 | 占比 | 处理状态 |
     占比 = 该大类 Bug 数 / 总 Bug 数 × 100%。
     处理状态说明当前收敛情况（已修复/依赖高通/挂起等）。
     最后要计算「无法复现率 = 无法复现数 / 总 Bug 数 × 100%」。
+
+    注意：标注了"建议人工复核"的低置信度 Bug 要在报告中特别说明。
+    
+    注意⚠️: 第一章和第二章展示每个分类前 15 条 Bug 为例。
+    全量 Bug 清单位置: 后处理脚本从 classification_data.json 自动生成附录。
   expected_output: >
-    完整的 Markdown 格式输出，包含第一章、第二章、第三章的全部内容。
+    完整的 Markdown 格式输出，包含：
+    1. 第一章 ~ 第三章的标准报告内容
+    2. 末尾附加如下格式的 LLM 精校记录：
+
+    ```
+    ## 方案B LLM精校记录
+    
+    | Bug ID | 原分类 | 精校后分类 | 置信度 | 变更原因/判断依据 |
+    |--------|--------|-----------|--------|-----------------|
+    | BUGxxx | QNX-SAIL | 硬件-电源/供电 | 高 | NOT "不是SAIL问题"语义被工具忽略 |
+    | BUGyyy | 需人工判断 | 应用crash-ANR | 中 | Comments提到"应用无响应" |
+    
+    - 总精校数: N 条
+    - 分类变更: M 条
+    - 主要修正模式: 否定语义误分、兜底遗漏细化、跨层误判
+    - 低置信度待复核: K 条（详见上表）
+    - **精校变更率**: 分类变更 M / 总精校 N（%= M/N×100%）
+      - 如果变更率 >30%，追加 "⚠️ 分类工具需调优：变更率 X%，主要修正模式为 xxx"
+    ```
+
     Bug 数据直接从 data_analyst 的结构化摘要中提取，不要编造不存在的数据。
   agent: issue_refiner
+  output_file: outputs/refined_chapters.md
 
 report_task:
   description: >
-    基于前两个任务的输出，生成最终《黑卡闪问题提炼分析报告》。
+    基于前两个任务的输出（含精校后的分类），生成最终《黑卡闪问题提炼分析报告》。
+
+    **增量模式（重要）:**
+    本次增量过滤：新增 {new_count} 条、状态变更 {changed_count} 条、已分析跳过 {skipped_count} 条。
+    - 报告结构和统计覆盖全部 {total_count} 条（因为统计数字基于全量数据）
+    - 但经验提炼（第四章）应聚焦新增和变更中发现的新模式，不要重复提炼已分析过的老问题
+    - 如果新增 {new_count}=0 且变更 {changed_count}=0，经验章节可以写"本轮无新增问题"
+    - 如果新增+变更 ≤ 10 条，精度覆盖每一条的详情；如果 >50 条，按分类聚合
 
     报告结构（严格按此格式）：
 
@@ -69,19 +147,28 @@ report_task:
     # 黑卡闪问题提炼分析
 
     > 数据来源：{excel_path}
-    > 状态说明：Closed=已关闭/已验证 | Test=修复后待验证 | Postpone=挂起(依赖外部/无法复现)
+    > 状态说明：Closed=已关闭/已验证 | Test=修复后待验证 | Postpone=挂起(依赖外部/无法复现)<br/>
+    > Analysis=分析中(无结论,适合工作流二) | Confirm=待确认(无结论,暂存)
     > 增量模式：本次新分析 {new_count} 条，跳过已分析 {skipped_count} 条
 
     ---
 
     ## 一、已修复的问题及原因
-    （直接使用 issue_refiner 第一章的输出）
+    （直接使用 issue_refiner 第一章的输出，注意内含精校前后的分类差异注释）
 
     ## 二、未修复/挂起的问题
     （直接使用 issue_refiner 第二章的输出）
 
+    ## 待分析（Analysis 状态）
+    （直接使用 issue_refiner「新增章节一」的输出）
+    > 这些问题的原始状态为 Analysis，正在分析中。适合作为工作流二输入。
+
+    ## 待确认（Confirm 状态）
+    （直接使用 issue_refiner「新增章节二」的输出）
+    > 这些问题仍在确认流程中，暂无最终结论。
+
     ## 三、核心问题分类统计
-    （直接使用 issue_refiner 第三章的输出）
+    （直接使用 issue_refiner 第三章的输出，加上精校影响说明）
 
     ## 四、需要提炼的经验点
     从已分类的 Bug 中识别模式和经验教训。提炼规则：
@@ -95,10 +182,13 @@ report_task:
     | 维度 | 结论 |
     |------|------|
     | **已修复** | 哪些大类基本收敛 |
-    | **未修复/卡点** | 残留风险 |
+    | **未修复/卡点** | 残留风险（包括 Postpone/Test/Review 等挂起状态） |
+    | **待分析（Analysis）** | Analysis 状态问题的处理建议：是否适合作为工作流二输入 |
+    | **待确认（Confirm）** | Confirm 状态问题的处理建议 |
     | **最大风险** | 影响面最大的问题 |
     | **最需改进** | 流程/工具/架构改进项 |
     | **工具建设** | 工具链建议 |
+    | **精校影响** | LLM二次精校纠正了多少条、主要修正了哪些误分类 |
 
     ```
 
@@ -107,6 +197,16 @@ report_task:
     - 表格格式严格对齐
     - 每条经验必须关联具体 Bug ID
     - 禁止编造 Excel 中不存在的字段或 Bug
+    - 禁止添加「附件」「附录」等引用实际不存在的 Excel 文件的段落
+    - 在总结表中加入「精校影响」维度，说明方案B LLM精校对分类的修正效果
+    - 精校数据来自 issue_refiner 末尾的「方案B LLM精校记录」表格
+    - ⚠️ **质量门禁**: 如果精校变更率超过 30%（分类变更数 / 总精校数 × 100%），
+      在总结的「最需改进」维度中追加标注 "⚠️ 分类工具需调优：LLM 精校变更率 X%，
+      主要修正模式为 xxx，建议检查 FINE_GRAINED_RULES 关键词覆盖度"
+    - ⚠️ **报告完整性**: 第一章和第二章的 Bug 清单展示 issue_refiner 输出的示例 Bug（最多前 15 条/类）。
+      全量 Bug 清单由后处理脚本从 JSON 自动生成附录，附加到报告尾部。
+      禁止出现"完整清单见XXX"等交叉引用，改为在每章末尾写：
+      "> 完整 Bug 清单见【附录：各分类完整 Bug 清单】"
   expected_output: >
     Markdown 格式的完整《黑卡闪问题提炼分析报告》，符合上述五段式结构。
   agent: report_writer

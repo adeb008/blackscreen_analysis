@@ -1,20 +1,24 @@
+# ── 密钥（绝对不要提交）──
 .env
-__pycache__/
-.DS_Store
-*.pyc
-.venv/
 
-# Temp files
+# ── Python ──
+__pycache__/
+.venv/
+*.pyc
+uv.lock
+
+# ── 系统 ──
+.DS_Store
+Thumbs.db
+
+# ── 临时文件 ──
 ~$*
 
-# Large log downloads (GB级)
-T1Q黑卡闪问题分析/
-
-# Outputs with old data
-outputs/report_ai.md
-
-# Analyzed bugs tracking (generated at runtime)
+# ── 运行时生成（不需要版本管理）──
+outputs/
 black_screen_data/analyzed_bugs.json
+black_screen_data/~$*.xlsx
 
-# Large reference files (push separately if needed)
+# ── 大数据文件 ──
+T1Q黑卡闪问题分析/
 knowledge/
