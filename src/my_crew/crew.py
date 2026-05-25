@@ -10,6 +10,7 @@ from crewai.agents.agent_builder.base_agent import BaseAgent
 from my_crew.tools.excel_issue_tool import ExcelIssueTool
 from my_crew.tools.bug_knowledge_tool import BugKnowledgeTool
 from my_crew.tools.log_download_tool import LogDownloadTool
+from my_crew.tools.experience_knowledge_tool import ExperienceMatchTool, ExperienceUpdateTool
 
 
 @CrewBase
@@ -55,6 +56,7 @@ class MyCrew:
         return Agent(
             config=self.agents_config["issue_refiner"],
             llm=self.deepseek_llm(),
+            tools=[ExperienceMatchTool(), ExperienceUpdateTool()],
             verbose=True,
         )
 
@@ -63,6 +65,7 @@ class MyCrew:
         return Agent(
             config=self.agents_config["report_writer"],
             llm=self.deepseek_llm(),
+            tools=[ExperienceMatchTool()],
             verbose=True,
         )
 

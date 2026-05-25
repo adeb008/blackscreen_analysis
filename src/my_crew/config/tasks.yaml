@@ -44,6 +44,12 @@ issue_refinement_task:
     25类细粒度分类完整定义见 models.py 的 CATEGORY_DEFINITIONS，共26条（含"其他/待分类"）。
     命中关键词见 ExcelIssueTool 内置加权规则引擎。
 
+    **精校步骤（严格按顺序）：**
+    步骤1: 先调用「经验库检索」工具，以当前项目名称 + Bug 摘要为入参，获取 top3 历史经验作为分类参考。
+    步骤2: 结合历史经验和 25 类规则，对每条 Bug 做分类判断。
+    步骤3: 精校完成后，对置信度「高」且分类有价值的新增 Bug，调用「经验库更新」工具，
+           将 project/category/root_cause/solution/keywords 写入经验库（至少覆盖 {new_count} 条新增问题中置信度高的条目）。
+
     精校原则：
     - 如果工具分类正确 → 确认保留
     - 如果工具分类错误（如"不是SAIL问题"被误分到SAIL类）→ 纠正

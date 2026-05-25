@@ -153,7 +153,7 @@ FINE_GRAINED_RULES: list[dict] = [
             "medium": ["ddr", "0xac12e0", "qualcomm", "高通case"],
             "weak": ["硬件问题", "硬件故障"],
         },
-        "exclude_keywords": ["不是硬件"],
+        "exclude_keywords": ["不是硬件", "hzhhnnas01", "desaysv.com"],
         "priority": 90,
         "section": "二、未修复/挂起的问题",
     },
@@ -212,7 +212,7 @@ FINE_GRAINED_RULES: list[dict] = [
         "description": "PAG/Lottie 动画渲染异常、GPU 渲染问题、OpenGL/Vulkan/Skia 异常",
         "keywords": {
             "strong": ["pag", "lottie", "gpu渲染"],
-            "medium": ["动画库", "opengl", "vulkan", "skia"],
+            "medium": ["动画库", "opengl", "vulkan", "skia", "壁纸", "记忆策略"],
             "weak": ["动画", "特效", "渲染"],
         },
         "exclude_keywords": [],
@@ -224,7 +224,7 @@ FINE_GRAINED_RULES: list[dict] = [
         "description": "system_server 冻结、进程 freeze、冻屏卡死",
         "keywords": {
             "strong": ["freeze", "冻结", "冻屏", "进程冻结"],
-            "medium": ["system_server", "process freeze", "程序被freeze"],
+            "medium": ["system_server", "process freeze", "程序被freeze", "系统负载", "负载过高"],
             "weak": ["卡死"],
         },
         "exclude_keywords": ["不卡死"],
@@ -299,9 +299,9 @@ FINE_GRAINED_RULES: list[dict] = [
         "name": "场景-CarPlay/Carlink",
         "description": "CarPlay/Carlink/HiCar 手机互联场景异常、CP 连接回连问题",
         "keywords": {
-            "strong": ["carplay", "carlink", "hicar", "cp连接", "cp回连"],
-            "medium": ["手机互联", "car life"],
-            "weak": ["有线cp", "无线cp"],
+            "strong": ["carplay", "carlink", "hicar", "cp连接", "cp回连", "hfp", "蓝牙"],
+            "medium": ["手机互联", "car life", "page timeout", "蓝牙连接"],
+            "weak": ["有线cp", "无线cp", "手机侧"],
         },
         "exclude_keywords": [],
         "priority": 50,
@@ -331,7 +331,53 @@ FINE_GRAINED_RULES: list[dict] = [
         "priority": 50,
         "section": "一、已修复的问题及原因",
     },
-]
+    {
+        "name": "应用-卡顿/响应",
+        "description": "LLM自动发现的新分类（1条Bug）",
+        "keywords": {
+            "strong": [],
+            "medium": [],
+            "weak": [
+                        "应用",
+                        "卡顿",
+                        "响应"
+            ]
+},
+        "exclude_keywords": [],
+        "priority": 50,
+        "section": "一、未分类",
+    },
+    {
+        "name": "系统-配置缺陷",
+        "description": "LLM自动发现的新分类（1条Bug）",
+        "keywords": {
+            "strong": [],
+            "medium": [],
+            "weak": [
+                        "系统",
+                        "配置缺陷"
+            ]
+},
+        "exclude_keywords": [],
+        "priority": 50,
+        "section": "一、系统相关",
+    },
+    {
+        "name": "系统-UI/弹窗",
+        "description": "LLM自动发现的新分类（2条Bug）",
+        "keywords": {
+            "strong": [],
+            "medium": [],
+            "weak": [
+                        "系统",
+                        "ui",
+                        "弹窗"
+            ]
+},
+        "exclude_keywords": [],
+        "priority": 50,
+        "section": "一、系统相关",
+    }]
 
 # 兜底分类
 FALLBACK_CATEGORY = "需人工判断"

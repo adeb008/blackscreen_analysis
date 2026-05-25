@@ -13,6 +13,7 @@
 """
 
 import json
+import os
 import sys
 import warnings
 from datetime import datetime
@@ -38,6 +39,21 @@ def _find_latest_excel() -> str:
         return path
     # 最后的兜底
     return ""
+
+
+def _count_excel_rows(excel_path: str) -> int:
+    """快速统计 Excel 行数"""
+    try:
+        wb = load_workbook(excel_path, read_only=True, data_only=True)
+        ws = wb[wb.sheetnames[0]]
+        return ws.max_row - 1
+    except Exception:
+        return 0
+
+
+def _is_forced() -> bool:
+    """检测是否启用了强制全量重跑模式"""
+    return os.getenv("FORCE_FULL_RUN") == "1" or "--force" in sys.argv
 
 
 def _incremental_filter(excel_path: str) -> dict:
@@ -82,9 +98,32 @@ def _incremental_filter(excel_path: str) -> dict:
     return result
 
 
-def _filtered_inputs(excel_path: str | None = None) -> tuple[dict, bool]:
-    """返回 (inputs_dict, is_already_up_to_date)"""
+def _filtered_inputs(excel_path: str | None = None, force: bool = False) -> tuple[dict, bool]:
+    """返回 (inputs_dict, is_already_up_to_date)
+
+    force=True 时跳过增量过滤，全量重跑（用于校正分类）
+    可通过环境变量 FORCE_FULL_RUN=1 全局启用
+    """
     import json as _json
+    import os as _os
+    
+    if force or _is_forced():
+        path = excel_path or _find_latest_excel()
+        total = _count_excel_rows(path)
+        print(f"\n{'='*50}")
+        print(f"⚠️  全量重跑模式 (FORCE_FULL_RUN=1)")
+        print(f"  文件: {Path(path).name} | 全部 {total} 条重新分析")
+        print(f"{'='*50}\n")
+        return {
+            "topic": "黑卡闪问题提炼分析",
+            "current_year": str(datetime.now().year),
+            "excel_path": str(Path(path).as_posix()),
+            "new_count": str(total),
+            "changed_count": "0",
+            "skipped_count": "0",
+            "total_count": str(total),
+        }, False  # 不跳过，强制全量
+    
     path = excel_path or _find_latest_excel()
     filt = _incremental_filter(path)
 
@@ -144,7 +183,8 @@ def refine_complete():
     inputs, up_to_date = _filtered_inputs(excel_path)
     
     import subprocess
-    base = Path(__file__).parent.parent
+    from my_crew.config import get_project_root
+    base = get_project_root()
     
     if up_to_date:
         print("⏭️  无新增/变更 Bug，跳过 CrewAI，直接执行后处理")
@@ -167,10 +207,7 @@ def refine_complete():
     # Step 2: 关键词自学习
     print("\n>>> 关键词自学习: 从 LLM 精校结果提取关键词补充规则")
     result = subprocess.run(
-        ["uv", "run", "python", "-c", """
-from scripts.learn_keywords_from_llm import learn_keywords
-learn_keywords()
-"""],
+        ["uv", "run", "python", "scripts/learn_keywords_from_llm.py"],
         cwd=base, capture_output=True, text=True, timeout=60,
     )
     print(result.stdout)

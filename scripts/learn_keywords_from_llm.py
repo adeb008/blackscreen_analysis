@@ -34,7 +34,10 @@ STOPWORDS = {
     "版本", "之前", "之后", "目前", "现在", "然后", "或者",
     "一下", "一次", "一个", "一条", "打开", "关闭", "进入",
     "系统", "界面", "显示", "操作", "数据", "信息", "状态",
-    "时间", "问题", "bug", "Bug", "log", "Log", "LOG",
+    "时间", "bug", "Bug", "log", "Log", "LOG",
+    # 日志路径/文件名 (长字符串+数字模式)
+    "root_cause", "workitemId", "newBugDetail",
+    "code-gerrit", "hzhhnnas01",
 }
 
 
@@ -127,6 +130,12 @@ def is_keyword_useful(kw: str, existing: set[str]) -> bool:
     if kw.startswith("Bug") or kw.startswith("BUG") or kw.startswith("bug"):
         return False
     if kw.endswith(".com"):
+        return False
+    # 跳过日志目录名: logs_20260515-170451
+    if re.search(r'^logs?_\d{8}-\d{6}$', kw, re.IGNORECASE):
+        return False
+    # 跳过纯数字+字母混合的 ID 串
+    if re.search(r'^[A-Z]{3,}\d{10,}$', kw):      # PMD2025041715421331396
         return False
     # 跳过纯拼音人名
     pinyin_patterns = {'Deng', 'Song', 'Liu', 'Wang', 'Zhang', 'Li', 'Chen',

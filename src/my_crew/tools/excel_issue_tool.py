@@ -71,6 +71,26 @@ class ExcelIssueTool(BaseTool):
     # 主入口
     # ========================================================
 
+    def _get_worksheet(self, workbook, sheet_name: str | None):
+        """获取工作表，不区分大小写"""
+        if sheet_name:
+            # 精确匹配优先，再大小写不敏感匹配
+            if sheet_name in workbook.sheetnames:
+                return workbook[sheet_name]
+            lower = sheet_name.lower()
+            for name in workbook.sheetnames:
+                if name.lower() == lower:
+                    return workbook[name]
+            # 模糊匹配：sheet_name 出现在任何已有 sheet 名中
+            for name in workbook.sheetnames:
+                if lower in name.lower() or name.lower() in lower:
+                    return workbook[name]
+            # 都不匹配，报错
+            available = ", ".join(workbook.sheetnames)
+            raise ValueError(f"工作表 '{sheet_name}' 不存在。可用: {available}")
+        # 默认取第一个 sheet
+        return workbook[workbook.sheetnames[0]]
+
     def _run(self, excel_path: str, sheet_name: str | None = None,
              max_examples: int = 20, tracking_file: str | None = None,
              json_output: str | None = None) -> str:
@@ -79,7 +99,10 @@ class ExcelIssueTool(BaseTool):
             return f"Error: Excel file not found: {excel_path}"
 
         workbook = load_workbook(path, read_only=True, data_only=True)
-        worksheet = workbook[sheet_name] if sheet_name else workbook[workbook.sheetnames[0]]
+        try:
+            worksheet = self._get_worksheet(workbook, sheet_name)
+        except ValueError as e:
+            return f"Error: {e}"
         rows = list(worksheet.iter_rows(values_only=True))
         if not rows:
             return "Error: Excel sheet is empty."
@@ -248,8 +271,9 @@ class ExcelIssueTool(BaseTool):
 
     def _build_analysis_text(self, record: dict[str, str],
                              mapping: dict[str, str | None]) -> str:
-        """构建分析文本：Title + Comments + Cause Analysis + Solved Scheme + Actual Result"""
-        source_keys = ["title", "comments", "root_cause", "solved_scheme", "actual_result"]
+        """构建分析文本：Title + Comments + Cause Analysis + Solved Scheme
+        （不包含 Actual Result — 那是工作流二的输入：问题描述+时间+日志路径）"""
+        source_keys = ["title", "comments", "root_cause", "solved_scheme"]
         parts = []
         for key in source_keys:
             col = mapping.get(key)
