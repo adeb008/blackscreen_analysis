@@ -525,11 +525,28 @@ def main():
             except Exception:
                 pass
         for cat, bids in new_cats.items():
+            # 断链2修复: pending 中附带 bug_texts，供 generate_keywords 调 LLM 使用
+            bug_texts = []
+            for bid in bids:
+                info = all_results.get(bid, {})
+                text = info.get("title") or info.get("description") or info.get("summary") or ""
+                bug_texts.append(str(text).strip())
+
             if cat in existing_pending:
-                existing_pending[cat].extend(bids)
-                existing_pending[cat] = list(set(existing_pending[cat]))
+                old_entry = existing_pending[cat]
+                # 兼容旧格式（list）
+                if isinstance(old_entry, list):
+                    old_entry = {"bug_ids": old_entry, "bug_texts": []}
+                old_bids = set(old_entry.get("bug_ids", []))
+                old_texts = old_entry.get("bug_texts", [])
+                for bid, txt in zip(bids, bug_texts):
+                    if bid not in old_bids:
+                        old_entry["bug_ids"].append(bid)
+                        old_texts.append(txt)
+                old_entry["bug_texts"] = old_texts
+                existing_pending[cat] = old_entry
             else:
-                existing_pending[cat] = bids
+                existing_pending[cat] = {"bug_ids": bids, "bug_texts": bug_texts}
             print(f"   {cat}: {len(bids)} 条 Bug [{', '.join(bids[:3])}{'...' if len(bids)>3 else ''}]")
         pending_path.parent.mkdir(parents=True, exist_ok=True)
         pending_path.write_text(json.dumps(existing_pending, ensure_ascii=False, indent=2), encoding="utf-8")

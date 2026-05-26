@@ -11,6 +11,8 @@ from my_crew.tools.excel_issue_tool import ExcelIssueTool
 from my_crew.tools.bug_knowledge_tool import BugKnowledgeTool
 from my_crew.tools.log_download_tool import LogDownloadTool
 from my_crew.tools.experience_knowledge_tool import ExperienceMatchTool, ExperienceUpdateTool
+from my_crew.tools.design_lesson_tool import DesignLessonSaveTool, DesignLessonQueryTool
+from my_crew.tools.no_log_scan_tool import NoLogScanTool
 
 
 @CrewBase
@@ -52,6 +54,15 @@ class MyCrew:
         )
 
     @agent
+    def no_log_auditor(self) -> Agent:
+        return Agent(
+            config=self.agents_config["no_log_auditor"],
+            llm=self.deepseek_llm(),
+            tools=[NoLogScanTool()],
+            verbose=True,
+        )
+
+    @agent
     def issue_refiner(self) -> Agent:
         return Agent(
             config=self.agents_config["issue_refiner"],
@@ -65,7 +76,11 @@ class MyCrew:
         return Agent(
             config=self.agents_config["report_writer"],
             llm=self.deepseek_llm(),
-            tools=[ExperienceMatchTool()],
+            tools=[
+                ExperienceMatchTool(),
+                DesignLessonQueryTool(),   # 写入前先查重
+                DesignLessonSaveTool(),    # 写入设计经验库
+            ],
             verbose=True,
         )
 
@@ -119,6 +134,13 @@ class MyCrew:
         return Task(config=self.tasks_config["data_analysis_task"])
 
     @task
+    def no_log_audit_task(self) -> Task:
+        return Task(
+            config=self.tasks_config["no_log_audit_task"],
+            output_file="outputs/no_log_report.md",
+        )
+
+    @task
     def issue_refinement_task(self) -> Task:
         return Task(config=self.tasks_config["issue_refinement_task"])
 
@@ -169,9 +191,10 @@ class MyCrew:
     def refinement_crew(self) -> Crew:
         """工作流一: 问题分析提炼"""
         return Crew(
-            agents=[self.data_analyst(), self.issue_refiner(), self.report_writer()],
-            tasks=[self.data_analysis_task(), self.issue_refinement_task(),
-                   self.report_task()],
+            agents=[self.data_analyst(), self.no_log_auditor(),
+                    self.issue_refiner(), self.report_writer()],
+            tasks=[self.data_analysis_task(), self.no_log_audit_task(),
+                   self.issue_refinement_task(), self.report_task()],
             process=Process.sequential,
             verbose=True,
         )

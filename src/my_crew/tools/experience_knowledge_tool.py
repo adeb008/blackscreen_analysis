@@ -8,7 +8,11 @@ from pydantic import BaseModel, Field
 from typing import Optional
 import requests, os, json
 
-API_BASE = os.environ.get("EXPERIENCE_API_URL", "http://localhost:8765")
+API_BASE = os.environ.get("EXPERIENCE_API_URL", "http://10.219.9.92:8765")
+API_KEY  = os.environ.get("EXPERIENCE_API_KEY", "")
+
+def _headers():
+    return {"X-API-Key": API_KEY} if API_KEY else {}
 
 
 class MatchInput(BaseModel):
@@ -18,7 +22,7 @@ class MatchInput(BaseModel):
 
 
 class ExperienceMatchTool(BaseTool):
-    name: str = "经验库检索"
+    name: str = "experience_search"
     description: str = (
         "从黑卡闪经验库中检索与当前 Bug 最相关的历史经验，"
         "返回根因、解决方案和关键词，辅助分类精校。"
@@ -30,6 +34,7 @@ class ExperienceMatchTool(BaseTool):
             resp = requests.post(
                 f"{API_BASE}/match",
                 json={"project": project, "bug_text": bug_text, "top_n": top_n},
+                headers=_headers(),
                 timeout=5
             )
             data = resp.json()
@@ -57,7 +62,7 @@ class UpdateInput(BaseModel):
 
 
 class ExperienceUpdateTool(BaseTool):
-    name: str = "经验库更新"
+    name: str = "experience_update"
     description: str = (
         "将新识别的 Bug 分类经验写入经验库。"
         "LLM 精校后自动调用，实现经验库闭环更新。"
@@ -79,6 +84,7 @@ class ExperienceUpdateTool(BaseTool):
                     "source_bug": source_bug,
                     "confidence": confidence
                 },
+                headers=_headers(),
                 timeout=5
             )
             data = resp.json()

@@ -27,6 +27,54 @@ data_analysis_task:
   agent: data_analyst
   output_file: outputs/data_analysis_summary.md
 
+no_log_audit_task:
+  description: >
+    调用 no_log_scanner 工具扫描 outputs/classification_data.json（由 data_analyst 生成），
+    识别所有无日志/无法分析的问题。
+
+    工具入参：
+    - json_path: outputs/classification_data.json
+    - excel_path: {excel_path}（用于补充 actual_result/solved_scheme 字段）
+    - output_path: outputs/no_log_report.md
+
+    工具执行后，基于工具返回的摘要，撰写如下结构的报告：
+
+    ## 无日志/无法分析问题专项审计
+
+    ### 总览
+    - 总 Bug 数、无日志 Bug 数、**无日志占比**、**有效日志覆盖率**
+
+    ### 无日志原因分布
+    表格：原因 | 数量 | 占无日志比
+
+    ### 按模块分布
+    表格：模块 | 无日志数 | 该模块总数 | 无日志率
+
+    ### 按严重度分布
+    表格：严重度 | 无日志数 | 占无日志比
+
+    ### 影响评估
+    - Postpone（已永久搁置）：X 条
+    - Analysis（分析中，需补抓日志）：X 条 → **这些是工作流二的优先输入**
+    - Open/New（待处理）：X 条
+
+    ### 需优先补抓日志的问题（Analysis 状态）
+    完整表格（不省略）
+
+    ### 完整无日志问题清单
+    完整表格（不省略）
+
+    ### 经验沉淀建议
+    列出建议写入经验库的规律条目
+
+    **重要**: 在报告末尾输出一行机器可读的摘要供下游使用，格式如下（用实际数字替换尖括号部分）：
+    NO_LOG_SUMMARY: total=<总数> no_log=<无日志数> ratio=<无日志占比%> coverage=<有效日志覆盖率%> analysis_need_log=<Analysis状态数>
+  expected_output: >
+    完整的无日志专项审计 Markdown 报告，包含总览/原因分布/模块分布/严重度分布/
+    影响评估/完整清单/经验建议，末尾含 NO_LOG_SUMMARY 机器可读行。
+  agent: no_log_auditor
+  output_file: outputs/no_log_report.md
+
 issue_refinement_task:
   description: >
     基于 data_analyst 的结构化摘要，做两件事：
@@ -47,8 +95,11 @@ issue_refinement_task:
     **精校步骤（严格按顺序）：**
     步骤1: 先调用「经验库检索」工具，以当前项目名称 + Bug 摘要为入参，获取 top3 历史经验作为分类参考。
     步骤2: 结合历史经验和 25 类规则，对每条 Bug 做分类判断。
-    步骤3: 精校完成后，对置信度「高」且分类有价值的新增 Bug，调用「经验库更新」工具，
-           将 project/category/root_cause/solution/keywords 写入经验库（至少覆盖 {new_count} 条新增问题中置信度高的条目）。
+    步骤3: 精校完成后，**必须**对每一条置信度「高」或「中」的新增 Bug 逐条调用「经验库更新」工具，
+           将 project/category/root_cause/solution/keywords 写入经验库。
+           这一步不可跳过——即使只有 1 条新增问题，也必须调用。
+           如未调用，视为本次任务未完成，需重新执行步骤3。
+           覆盖目标：{new_count} 条新增问题中，置信度高/中的条目全部写入，低置信度的标注原因后跳过。
 
     精校原则：
     - 如果工具分类正确 → 确认保留
@@ -176,6 +227,10 @@ report_task:
     ## 三、核心问题分类统计
     （直接使用 issue_refiner 第三章的输出，加上精校影响说明）
 
+    在统计表格末尾追加以下行（数据从 no_log_auditor 的 NO_LOG_SUMMARY 机器可读行读取）：
+    | ⚠️ 无日志/无法分析 | <无日志数> 条（占比 <无日志占比>%，日志覆盖率 <覆盖率>%） |
+    如无日志数为0则写「无」，不需要显示该行。
+
     ## 四、需要提炼的经验点
     从已分类的 Bug 中识别模式和经验教训。提炼规则：
     - P0：同一根因 >= 3 条独立 Bug → 必须提炼，标注为 High
@@ -183,6 +238,24 @@ report_task:
     - P2：同一根因 >= 2 条跨模块 → 提炼
     - P3：单一 Bug 但根因典型 → 可选
     经验格式：### 经验N：标题\n- **现象：**\n- **痛点/根因：**\n- **建议：**
+
+    **【第四章完成后：写入设计经验库（必须执行，不可跳过）】**
+    对第四章中提炼出的每一条经验，按以下步骤操作：
+
+    步骤A：先调用「design_lesson_query」工具，以经验标题关键词检索，确认库中是否已有相似条目。
+    步骤B：如无重复，调用「design_lesson_save」工具逐条写入，字段映射规则：
+      - lesson_title   → 经验标题（### 后的文字）
+      - phenomenon     → 现象描述
+      - root_cause     → 痛点/根因
+      - design_suggestion → 建议（这是核心，必须包含可操作的改进措施）
+      - arch_layer     → 根据根因定位层次填写：MCU / QNX / Android / 跨层
+      - arch_module    → 关联的具体模块（如 QNX/SAIL、Android/SurfaceFlinger、MCU/Watchdog）
+      - priority       → 按提炼规则对应：P0=High / P1 / P2 / P3
+      - source_bug_ids → 该经验来源的所有 Bug ID 列表
+      - project        → {excel_path} 中的项目名称
+    步骤C：如已有相似条目，判断新经验是否有增量信息（新Bug ID / 更完善的建议）→ 仍调用「design_lesson_save」更新。
+    覆盖目标：第四章每一条经验均需完成写入，一条不能遗漏。
+    全部写入完成后，在报告末尾追加统计行：「> 本次写入设计经验库 X 条（新增 Y 条，更新 Z 条）」。
 
     ## 五、总结
     | 维度 | 结论 |
@@ -195,6 +268,7 @@ report_task:
     | **最需改进** | 流程/工具/架构改进项 |
     | **工具建设** | 工具链建议 |
     | **精校影响** | LLM二次精校纠正了多少条、主要修正了哪些误分类 |
+    | **日志覆盖率** | 有日志可分析的问题占比（来自 no_log_auditor），以及无日志问题的处理建议 |
 
     ```
 

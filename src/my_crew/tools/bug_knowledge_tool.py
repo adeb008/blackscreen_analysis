@@ -70,7 +70,7 @@ class BugKnowledgeInput(BaseModel):
 
 
 class BugKnowledgeTool(BaseTool):
-    name: str = "Bug 知识库"
+    name: str = "bug_knowledge_base"
     description: str = (
         "闭环知识库：记录每条 Bug 的分类（工作流一）和深度分析结果（工作流二），"
         "支持增量过滤、趋势统计和模块热力图。action: filter | mark_refined | "

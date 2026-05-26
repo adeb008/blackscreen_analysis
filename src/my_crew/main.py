@@ -242,6 +242,18 @@ def refine_complete():
     if result.returncode != 0:
         print(f"[Obsidian同步警告] {result.stderr[:200]}")
 
+    # Step 6: 经验库关键词反哺（断链1修复）
+    # 将 experience.db 中高置信度关键词导出到 keywords_override.json
+    print("\n>>> 经验库反哺: 导出高置信度关键词到 outputs/keywords_override.json")
+    result = subprocess.run(
+        ["uv", "run", "python", "scripts/export_exp_keywords.py",
+         "--min-confidence", "0.7", "--min-hits", "2"],
+        cwd=base, capture_output=True, text=True, timeout=30,
+    )
+    print(result.stdout)
+    if result.returncode != 0:
+        print(f"[经验库反哺警告] {result.stderr[:200]}")
+
 
 def trends():
     """生成趋势与热力图报告"""

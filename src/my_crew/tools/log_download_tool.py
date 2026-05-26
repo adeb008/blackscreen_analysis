@@ -24,7 +24,7 @@ class LogDownloadInput(BaseModel):
 
 
 class LogDownloadTool(BaseTool):
-    name: str = "黑卡闪日志下载器"
+    name: str = "spi_log_downloader"
     description: str = (
         "从 Actual Result 列提取日志 NAS 路径，检查权限，下载到本地。"
         "返回 JSON: {bug_id, path, status: ok|no_path|denied|error, local_dir, file_count}"

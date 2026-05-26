@@ -27,7 +27,7 @@ class BugTrackerInput(BaseModel):
 
 
 class BugTrackerTool(BaseTool):
-    name: str = "Bug ID 增量跟踪器"
+    name: str = "bug_id_tracker"
     description: str = (
         "跟踪已分析过的 Bug ID，支持增量过滤（跳过已分析且状态未变的 Bug）、"
         "标记分析完成、查看统计。避免重复分析同一问题。"

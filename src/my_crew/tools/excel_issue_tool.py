@@ -37,7 +37,7 @@ CONFIRM_STATUS_WORDS = ["confirm"]          # 待确认，无结论
 class ExcelIssueTool(BaseTool):
     """方案A升级版：25类细粒度分类 + 权重体系 + 负向关键词排除 + Solved Scheme列纳入分析"""
 
-    name: str = "Excel Black-Screen/Freeze/Flicker Issue Analyzer"
+    name: str = "excel_issue_analyzer"
     description: str = (
         "Read an issue-list Excel file and return a structured markdown summary "
         "including field mapping, distributions, root cause classification (25 categories with "

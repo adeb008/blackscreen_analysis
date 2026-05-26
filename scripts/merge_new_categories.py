@@ -27,13 +27,86 @@ def parse_section_from_name(name: str) -> str:
     return "一、未分类"
 
 
-def generate_keywords(name: str, bugs: list[str]) -> dict:
-    """从分类名自动生成关键词弱匹配"""
-    keywords = {"strong": [], "medium": [], "weak": []}
-    # 提取名称中的关键词
-    for part in name.replace("/", " ").replace("-", " ").split():
+def generate_keywords(name: str, bugs: list) -> dict:
+    """
+    断链2修复: 用 LLM 从真实 bug 文本生成三级关键词。
+
+    bugs 格式（新格式）: {"bug_ids": [...], "bug_texts": [...]}
+    兼容旧格式（list of str bug_ids）
+
+    返回: {"strong": [...], "medium": [...], "weak": [...]}
+    """
+    import os, json as _json
+
+    keywords: dict = {"strong": [], "medium": [], "weak": []}
+
+    # 兼容新旧格式
+    if isinstance(bugs, dict):
+        bug_texts = bugs.get("bug_texts", [])
+    else:
+        # 旧格式: 只有 bug_id 列表，无文本，降级到拆名
+        bug_texts = []
+
+    # 过滤空文本
+    real_texts = [t for t in bug_texts if t and len(t) > 2]
+
+    if not real_texts:
+        # 无文本时退化为拆分类名（比原来稍好：多级拆）
+        for part in name.replace("/", " ").replace("-", " ").replace("_", " ").split():
+            if len(part) >= 2 and not part.isdigit():
+                keywords["weak"].append(part)
+        return keywords
+
+    # 拼接 bug 摘要（最多 8 条，避免 prompt 过长）
+    sample_texts = "\n".join(f"- {t}" for t in real_texts[:8])
+
+    prompt = f"""你是汽车信息娱乐系统（IVI）测试专家，专注于黑屏/花屏/重启问题分类。
+
+新分类名称: 「{name}」
+以下是属于该分类的真实 Bug 描述摘要（最多8条）:
+{sample_texts}
+
+请根据以上 Bug 描述，为该分类提取关键词，分三级:
+- strong (强匹配): 出现即可高置信度判定为该分类的词，如专有技术名词、错误码、模块名
+- medium (中匹配): 出现概率高但不唯一的词，如症状描述词
+- weak   (弱匹配): 辅助词，需配合其他词才有意义
+
+输出严格 JSON 格式（不要任何说明文字）:
+{{"strong": ["词1","词2"], "medium": ["词3"], "weak": ["词4","词5"]}}"""
+
+    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("MODEL_API_KEY", "")
+    base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    model = os.environ.get("OPENAI_MODEL_NAME", os.environ.get("MODEL", "gpt-4o-mini"))
+
+    try:
+        import requests as _req
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.2,
+            "max_tokens": 300,
+        }
+        resp = _req.post(f"{base_url}/chat/completions", json=payload, headers=headers, timeout=30)
+        resp.raise_for_status()
+        raw = resp.json()["choices"][0]["message"]["content"].strip()
+        # 提取 JSON
+        import re
+        m = re.search(r'\{.*\}', raw, re.DOTALL)
+        if m:
+            parsed = _json.loads(m.group())
+            for level in ("strong", "medium", "weak"):
+                kws = parsed.get(level, [])
+                keywords[level] = [str(k).strip() for k in kws if k]
+            print(f"   [LLM关键词] {name}: strong={len(keywords['strong'])} medium={len(keywords['medium'])} weak={len(keywords['weak'])}")
+            return keywords
+    except Exception as e:
+        print(f"   [LLM关键词] ⚠️  调用失败({e})，降级到拆名")
+
+    # 降级: 拆分类名
+    for part in name.replace("/", " ").replace("-", " ").replace("_", " ").split():
         if len(part) >= 2 and not part.isdigit():
-            keywords["weak"].append(part.lower())
+            keywords["weak"].append(part)
     return keywords
 
 
