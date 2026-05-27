@@ -80,13 +80,13 @@ issue_refinement_task:
     基于 data_analyst 的结构化摘要，做两件事：
 
     **增量模式（重要）:**
-    本次增量过滤：新增 {new_count} 条、状态变更 {changed_count} 条、已分析跳过 {skipped_count} 条。
-    - 【第一部分】LLM 精校：只精校新增和状态变更的问题，已分析的 {skipped_count} 条保持原有分类不变
+    本次增量过滤结果见 outputs/classification_data.json 中的 new_count/changed_count/skipped_count 字段。
+    - 【第一部分】LLM 精校：只精校新增和状态变更的问题，已分析的条目保持原有分类不变
     - 【第二部分】报告前三章：第一章和第二章聚焦新增+变更的问题详情，已分析的只更新统计汇总
 
     【第一部分：LLM 二次精校分类（方案B）】
     逐条审核 data_analyst 输出的 `_root_cause_category` 分类结果，判断是否需要修正。
-    **只审核新增的 {new_count} 条和状态变更的 {changed_count} 条**，已分析的 {skipped_count} 条不需要重新精校。
+    **只审核新增的条目和状态变更的条目**，已分析的条目不需要重新精校。
     精确分类数据见 `outputs/classification_data.json`（每条 Bug 的 root_cause_category、matched_keywords、
     parsed_root_cause、fix_status 等结构化字段，避免从 Markdown 推测）。
     25类细粒度分类完整定义见 models.py 的 CATEGORY_DEFINITIONS，共26条（含"其他/待分类"）。
@@ -94,12 +94,8 @@ issue_refinement_task:
 
     **精校步骤（严格按顺序）：**
     步骤1: 先调用「经验库检索」工具，以当前项目名称 + Bug 摘要为入参，获取 top3 历史经验作为分类参考。
-    步骤2: 结合历史经验和 25 类规则，对每条 Bug 做分类判断。
-    步骤3: 精校完成后，**必须**对每一条置信度「高」或「中」的新增 Bug 逐条调用「经验库更新」工具，
-           将 project/category/root_cause/solution/keywords 写入经验库。
-           这一步不可跳过——即使只有 1 条新增问题，也必须调用。
-           如未调用，视为本次任务未完成，需重新执行步骤3。
-           覆盖目标：{new_count} 条新增问题中，置信度高/中的条目全部写入，低置信度的标注原因后跳过。
+    步骤2: 结合历史经验和 25 类规则，对每条 Bug 做分类判断，给出置信度（高/中/低）和依据。
+    （经验库写入由独立的 experience_save_task 负责，本任务只做精校分类）
 
     精校原则：
     - 如果工具分类正确 → 确认保留
@@ -187,15 +183,59 @@ issue_refinement_task:
   agent: issue_refiner
   output_file: outputs/refined_chapters.md
 
+experience_save_task:
+  description: >
+    读取 outputs/classification_data.json，把本轮精校识别的问题分类经验写入经验库。
+
+    **执行步骤（必须全部完成）：**
+
+    步骤1: 读取 outputs/classification_data.json，取出其中 status 为 "new" 或 "changed"
+           的条目（即本轮新增和变更的问题）。
+
+    步骤2: 对每一条条目，调用「经验库更新」工具，入参字段如下：
+           - project: classification_data.json 中的 project 字段（如 "8775_T1Q_国内"）
+           - category: root_cause_category 字段
+           - root_cause: parsed_root_cause 字段（如为空则用 category 代替）
+           - solution: 根据 fix_status 和 comments 字段推断（已修复的写修复方案，未修复的写"待修复"）
+           - keywords: matched_keywords 字段（列表转逗号分隔字符串）
+           - summary: summary 字段（问题现象摘要）
+           - confidence: llm_confidence 字段（high/medium/low），如字段不存在默认 "medium"
+
+    步骤3: 汇总结果，统计：
+           - 成功写入: N 条
+           - 已存在跳过: M 条
+           - 失败: K 条（如有，写明原因）
+
+    注意：classification_data.json 如果没有 status 字段，则对所有条目执行写入。
+    如果文件不存在，输出错误信息并终止。
+  expected_output: >
+    经验库写入汇总报告（纯文本），格式如下：
+
+    ## 经验库写入结果
+
+    - 本轮处理条目: X 条（new=A, changed=B）
+    - 成功写入: N 条
+    - 已存在跳过: M 条
+    - 失败: K 条
+
+    ### 写入详情
+    | 序号 | category | root_cause | 结果 |
+    |------|----------|-----------|------|
+    | 1    | QNX-SAIL | safetymonitor超时 | 成功 |
+    | 2    | 应用crash | ANR-输入超时 | 已存在,跳过 |
+
+    写入完成，经验库已更新。
+  agent: experience_saver
+
 report_task:
   description: >
     基于前两个任务的输出（含精校后的分类），生成最终《黑卡闪问题提炼分析报告》。
 
     **增量模式（重要）:**
-    本次增量过滤：新增 {new_count} 条、状态变更 {changed_count} 条、已分析跳过 {skipped_count} 条。
-    - 报告结构和统计覆盖全部 {total_count} 条（因为统计数字基于全量数据）
+    本次增量过滤数量见 outputs/classification_data.json 的 new_count/changed_count/skipped_count 字段。
+    - 报告结构和统计覆盖全量数据（统计数字基于全量）
     - 但经验提炼（第四章）应聚焦新增和变更中发现的新模式，不要重复提炼已分析过的老问题
-    - 如果新增 {new_count}=0 且变更 {changed_count}=0，经验章节可以写"本轮无新增问题"
+    - 如果新增=0 且变更=0，经验章节可以写"本轮无新增问题"
     - 如果新增+变更 ≤ 10 条，精度覆盖每一条的详情；如果 >50 条，按分类聚合
 
     报告结构（严格按此格式）：
@@ -311,7 +351,7 @@ download_logs_task:
     | BUG-yyy | ... | ❌ 无权限 | - |
     ```
 
-    下载到 T1Q黑卡闪问题分析/{BugID}_{问题描述}/ 目录。
+    下载到 T1Q黑卡闪问题分析/<BugID>_<问题描述>/ 目录。
   expected_output: >
     下载结果汇总表 + 各问题下载状态。下载完成后列出所有本地日志目录的路径。
   agent: log_downloader
@@ -378,39 +418,39 @@ publish_report_task:
     # 黑卡闪问题日志分析报告
 
     ## 基本信息
-    - Bug ID: {bug_id}
-    - 标题: {title}
-    - 负责人: {assignee}
-    - 问题时间: {timestamp}
+    - Bug ID: <bug_id>
+    - 标题: <title>
+    - 负责人: <assignee>
+    - 问题时间: <timestamp>
 
     ## 分析结论
-    - 根因分类: {category}
-    - 根因描述: {root_cause}
-    - 置信度: {confidence}（高/中/低）
-    - 定位层次: {layer}（MCU/QNX/Android）
+    - 根因分类: <category>
+    - 根因描述: <root_cause>
+    - 置信度: <confidence>（高/中/低）
+    - 定位层次: <layer>（MCU/QNX/Android）
 
     ## 分层分析详情
     ### MCU 层
-    {mcu_findings}
+    <mcu_findings>
 
     ### QNX 层
-    {qnx_findings}
+    <qnx_findings>
 
     ### Android 层
-    {android_findings}
+    <android_findings>
 
     ## 关键证据
-    {evidence}
+    <evidence>
 
     ## 建议对策
-    {recommendations}
+    <recommendations>
 
     ## 待确认事项
-    {open_items}
+    <open_items>
     ```
 
-    报告保存到 reports/{bug_id}_analysis.md。
+    报告保存到 reports/<bug_id>_analysis.md。
   expected_output: >
     完整的分析报告 Markdown 文件路径。
   agent: report_publisher
-  output_file: reports/{bug_id}_analysis.md
+  output_file: reports/<bug_id>_analysis.md

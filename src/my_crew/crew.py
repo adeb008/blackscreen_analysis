@@ -32,14 +32,13 @@ class MyCrew:
 
     # ── LLM ──
 
-    def deepseek_llm(self) -> LLM:
-        api_key = getenv("DEEPSEEK_API_KEY") or getenv("DEEPSEEK_ANTHROPIC_API_KEY")
+    def llm(self) -> LLM:
         return LLM(
-            model=getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
-            provider="deepseek",
-            api_key=api_key,
-            base_url=getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
-            timeout=int(getenv("DEEPSEEK_TIMEOUT_SECONDS", "600")),
+            model=getenv("ANTHROPIC_MODEL", "Qwen3.6-35B"),
+            provider="anthropic",
+            api_key=getenv("ANTHROPIC_API_TOKEN"),
+            base_url=getenv("ANTHROPIC_BASE_URL"),
+            timeout=int(getenv("ANTHROPIC_TIMEOUT_SECONDS", "600")),
         )
 
     # ── 工作流一 Agents ──
@@ -48,7 +47,7 @@ class MyCrew:
     def data_analyst(self) -> Agent:
         return Agent(
             config=self.agents_config["data_analyst"],
-            llm=self.deepseek_llm(),
+            llm=self.llm(),
             tools=[ExcelIssueTool(), BugKnowledgeTool()],
             verbose=True,
         )
@@ -57,7 +56,7 @@ class MyCrew:
     def no_log_auditor(self) -> Agent:
         return Agent(
             config=self.agents_config["no_log_auditor"],
-            llm=self.deepseek_llm(),
+            llm=self.llm(),
             tools=[NoLogScanTool()],
             verbose=True,
         )
@@ -66,8 +65,17 @@ class MyCrew:
     def issue_refiner(self) -> Agent:
         return Agent(
             config=self.agents_config["issue_refiner"],
-            llm=self.deepseek_llm(),
-            tools=[ExperienceMatchTool(), ExperienceUpdateTool()],
+            llm=self.llm(),
+            tools=[ExperienceMatchTool()],  # 只查不写，写入由 experience_saver 负责
+            verbose=True,
+        )
+
+    @agent
+    def experience_saver(self) -> Agent:
+        return Agent(
+            config=self.agents_config["experience_saver"],
+            llm=self.llm(),
+            tools=[ExperienceUpdateTool()],
             verbose=True,
         )
 
@@ -75,7 +83,7 @@ class MyCrew:
     def report_writer(self) -> Agent:
         return Agent(
             config=self.agents_config["report_writer"],
-            llm=self.deepseek_llm(),
+            llm=self.llm(),
             tools=[
                 ExperienceMatchTool(),
                 DesignLessonQueryTool(),   # 写入前先查重
@@ -90,7 +98,7 @@ class MyCrew:
     def log_downloader(self) -> Agent:
         return Agent(
             config=self.agents_config["log_downloader"],
-            llm=self.deepseek_llm(),
+            llm=self.llm(),
             tools=[LogDownloadTool(), BugKnowledgeTool()],
             verbose=True,
         )
@@ -99,7 +107,7 @@ class MyCrew:
     def log_analyzer_mcu(self) -> Agent:
         return Agent(
             config=self.agents_config["log_analyzer_mcu"],
-            llm=self.deepseek_llm(),
+            llm=self.llm(),
             verbose=True,
         )
 
@@ -107,7 +115,7 @@ class MyCrew:
     def log_analyzer_qnx(self) -> Agent:
         return Agent(
             config=self.agents_config["log_analyzer_qnx"],
-            llm=self.deepseek_llm(),
+            llm=self.llm(),
             verbose=True,
         )
 
@@ -115,7 +123,7 @@ class MyCrew:
     def log_analyzer_android(self) -> Agent:
         return Agent(
             config=self.agents_config["log_analyzer_android"],
-            llm=self.deepseek_llm(),
+            llm=self.llm(),
             verbose=True,
         )
 
@@ -123,7 +131,7 @@ class MyCrew:
     def report_publisher(self) -> Agent:
         return Agent(
             config=self.agents_config["report_publisher"],
-            llm=self.deepseek_llm(),
+            llm=self.llm(),
             verbose=True,
         )
 
@@ -143,6 +151,13 @@ class MyCrew:
     @task
     def issue_refinement_task(self) -> Task:
         return Task(config=self.tasks_config["issue_refinement_task"])
+
+    @task
+    def experience_save_task(self) -> Task:
+        return Task(
+            config=self.tasks_config["experience_save_task"],
+            output_file="outputs/experience_save_report.md",
+        )
 
     @task
     def report_task(self) -> Task:
@@ -192,9 +207,9 @@ class MyCrew:
         """工作流一: 问题分析提炼"""
         return Crew(
             agents=[self.data_analyst(), self.no_log_auditor(),
-                    self.issue_refiner(), self.report_writer()],
+                    self.issue_refiner(), self.experience_saver(), self.report_writer()],
             tasks=[self.data_analysis_task(), self.no_log_audit_task(),
-                   self.issue_refinement_task(), self.report_task()],
+                   self.issue_refinement_task(), self.experience_save_task(), self.report_task()],
             process=Process.sequential,
             verbose=True,
         )

@@ -54,6 +54,7 @@ class ExperienceMatchTool(BaseTool):
 class UpdateInput(BaseModel):
     project: str = Field(..., description="项目名称")
     category: str = Field(..., description="分类名称")
+    summary: str = Field(..., description="经验摘要（一句话概括根因现象）")
     root_cause: str = Field(..., description="根因描述")
     solution: str = Field(..., description="解决方案")
     keywords: list = Field(..., description="关键词列表")
@@ -69,15 +70,16 @@ class ExperienceUpdateTool(BaseTool):
     )
     args_schema: type = UpdateInput
 
-    def _run(self, project: str, category: str, root_cause: str,
-             solution: str, keywords: list, source_bug: str = "",
-             confidence: float = 0.7) -> str:
+    def _run(self, project: str, category: str, summary: str,
+             root_cause: str, solution: str, keywords: list,
+             source_bug: str = "", confidence: float = 0.7) -> str:
         try:
             resp = requests.post(
                 f"{API_BASE}/experience",
                 json={
                     "project": project,
                     "category": category,
+                    "summary": summary,
                     "root_cause": root_cause,
                     "solution": solution,
                     "keywords": keywords,
