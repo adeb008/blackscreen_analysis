@@ -1,9 +1,10 @@
 """CrewAI Tool — 黑卡闪问题 Excel 结构化分析（方案A+B 升级版）
 
-25类细粒度分类 + 权重体系 + 负向关键词排除 + Solved Scheme 列 + LLM二次精校接口"""
+细粒度分类 + 权重体系 + 负向关键词排除 + Solved Scheme 列 + LLM二次精校接口"""
 
 from __future__ import annotations
 
+import os
 import re
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -35,13 +36,13 @@ CONFIRM_STATUS_WORDS = ["confirm"]          # 待确认，无结论
 
 
 class ExcelIssueTool(BaseTool):
-    """方案A升级版：25类细粒度分类 + 权重体系 + 负向关键词排除 + Solved Scheme列纳入分析"""
+    """方案A升级版：细粒度分类 + 权重体系 + 负向关键词排除 + Solved Scheme列纳入分析"""
 
     name: str = "excel_issue_analyzer"
     description: str = (
         "Read an issue-list Excel file and return a structured markdown summary "
-        "including field mapping, distributions, root cause classification (25 categories with "
-        "weighted scoring + negative keyword exclusion), fixed/pending grouping, "
+        "including field mapping, distributions, root cause classification (weighted "
+        "scoring + negative keyword exclusion), fixed/pending grouping, "
         "cross tables, keyword analysis, and typical examples. "
         "Also includes 'Solved Scheme' and 'Actual Result' columns for comprehensive analysis."
     )
@@ -115,14 +116,31 @@ class ExcelIssueTool(BaseTool):
 
         mapping = self._map_columns(headers, records)
 
-        # ---- 对每条记录做25类加权根因分类（方案A） ----
+        # ---- 对每条记录做加权根因分类（方案A） ----
         for record in records:
             text = self._build_analysis_text(record, mapping)
+            evidence_bundle = self._extract_evidence_bundle(record, mapping)
+            rule_candidates = self._generate_rule_candidates(evidence_bundle)
             rc = self._classify_weighted(text)
-            record["_root_cause_category"] = rc["category"]
-            record["_root_cause_section"] = rc["section"]
-            record["_root_cause_score"] = str(rc["score"])
-            record["_root_cause_matched"] = ", ".join(rc["matched_keywords"])
+
+            top_candidate = (rule_candidates.get("top_candidates") or [{}])[0]
+            final_category = rule_candidates.get("final_candidate") or FALLBACK_CATEGORY
+            final_section = self._section_for_category(final_category)
+            final_score = top_candidate.get("score", 0)
+            final_keywords = top_candidate.get("matched_keywords", [])
+
+            if final_category == FALLBACK_CATEGORY and rc["category"] != FALLBACK_CATEGORY:
+                final_category = rc["category"]
+                final_section = rc["section"]
+                final_score = rc["score"]
+                final_keywords = rc["matched_keywords"]
+
+            record["_evidence_bundle"] = evidence_bundle
+            record["_rule_candidates"] = rule_candidates
+            record["_root_cause_category"] = final_category
+            record["_root_cause_section"] = final_section or rc["section"]
+            record["_root_cause_score"] = str(final_score)
+            record["_root_cause_matched"] = ", ".join(final_keywords)
 
             # 从 Comments / Cause Analysis / Solved Scheme 提取根因和修复方式
             dedicated_rc = self._value(record, mapping.get("root_cause"))
@@ -134,9 +152,13 @@ class ExcelIssueTool(BaseTool):
             # 判断修复状态
             record["_fix_status"] = self._classify_fix_status(record, mapping, text)
 
-        # ---- 知识库自动回写（闭环） ----
+        # ---- 增量状态标记 + 知识库自动回写（闭环） ----
         if tracking_file:
+            self._annotate_incremental_status(records, mapping, tracking_file)
             self._persist_to_kb(records, mapping, tracking_file, str(path))
+        else:
+            for record in records:
+                record.setdefault("_incremental_status", "full")
 
         # ---- 结构化 JSON 输出（供下游 Agent 精确引用） ----
         if json_output:
@@ -148,7 +170,7 @@ class ExcelIssueTool(BaseTool):
         lines.append(f"- 文件: {excel_path}")
         lines.append(f"- Sheet: {worksheet.title}")
         lines.append(f"- 数据行数: {len(records)}")
-        lines.append(f"- 分类体系: 25类细粒度 + 权重评分 + 负向关键词排除")
+        lines.append("- 分类体系: 细粒度权重评分 + 负向关键词排除")
 
         # ---- 字段映射 ----
         lines.append("\n## 字段映射")
@@ -171,8 +193,8 @@ class ExcelIssueTool(BaseTool):
         self._append_distribution(lines, "Module 分布", records, mapping.get("module"))
         self._append_distribution(lines, "Frequency 分布", records, mapping.get("frequency"))
 
-        # ---- 根因分类统计（25类） ----
-        lines.append("\n## 根因分类统计（25类细粒度）")
+        # ---- 根因分类统计 ----
+        lines.append("\n## 根因分类统计（细粒度）")
         rc_counter: Counter = Counter()
         rc_section_map: dict[str, set[str]] = defaultdict(set)
         for record in records:
@@ -255,7 +277,7 @@ class ExcelIssueTool(BaseTool):
 
         # ---- 给后续 Agent 的分析提示（含精校指引） ----
         lines.append("\n## 后续 Agent 分析提示")
-        lines.append("- 根因分类: 每条 Bug 已按 25 类加权规则自动分类，field `_root_cause_category`")
+        lines.append("- 根因分类: 每条 Bug 已按加权规则自动分类，field `_root_cause_category`")
         lines.append(f"- 权重评分: 每条 Bug 的匹配评分记录在 `_root_cause_score`")
         lines.append("- 修复状态: 已分入 已修复 / 未修复/挂起 / 无法复现，field `_fix_status`")
         lines.append("- 匹配关键词: 每条 Bug 命中的关键词记录在 `_root_cause_matched`")
@@ -282,7 +304,7 @@ class ExcelIssueTool(BaseTool):
         return "\n".join(parts)
 
     def _classify_weighted(self, text: str) -> dict:
-        """25类加权根因分类（方案A核心算法）
+        """加权根因分类（方案A核心算法）
 
         算法:
           1. 对每条规则，在 text 中匹配各级关键词
@@ -342,6 +364,209 @@ class ExcelIssueTool(BaseTool):
                 )
 
         return best
+
+    def _extract_evidence_bundle(self, record: dict[str, str],
+                                 mapping: dict[str, str | None]) -> dict[str, list[dict[str, Any]]]:
+        """按字段拆分证据，区分症状/根因/修复/上下文/否定证据。"""
+        evidence: dict[str, list[dict[str, Any]]] = {
+            "symptom": [],
+            "root_cause": [],
+            "fix": [],
+            "context": [],
+            "negative": [],
+        }
+
+        field_specs = [
+            ("title", "symptom", 1.0),
+            ("comments", "context", 1.2),
+            ("root_cause", "root_cause", 3.2),
+            ("fix_method", "fix", 1.0),
+            ("solved_scheme", "fix", 0.8),
+        ]
+
+        for field_key, default_bucket, weight in field_specs:
+            column = mapping.get(field_key)
+            text = self._value(record, column)
+            if not text:
+                continue
+            source_field = field_key if field_key != "root_cause" else "cause_analysis"
+            fragments = self._split_evidence_fragments(text)
+            if not fragments:
+                fragments = [text.strip()]
+            for fragment in fragments:
+                bucket = self._infer_evidence_bucket(fragment, default_bucket)
+                evidence[bucket].append({
+                    "text": fragment,
+                    "source_field": source_field,
+                    "weight": weight,
+                })
+
+        parsed = self._parse_comments(self._value(record, mapping.get("comments")))
+        if parsed.get("root_cause"):
+            evidence["root_cause"].append({
+                "text": parsed["root_cause"],
+                "source_field": "comments",
+                "weight": 2.0,
+            })
+        if parsed.get("fix_method"):
+            evidence["fix"].append({
+                "text": parsed["fix_method"],
+                "source_field": "comments",
+                "weight": 1.5,
+            })
+
+        return {
+            key: self._deduplicate_evidence_items(items)
+            for key, items in evidence.items()
+        }
+
+    def _generate_rule_candidates(self,
+                                  evidence_bundle: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+        """基于字段级证据重新计算候选分类，支持否定证据抵消。"""
+        top_candidates: list[dict[str, Any]] = []
+        excluded_candidates: list[dict[str, Any]] = []
+        all_positive_text = "\n".join(
+            item["text"]
+            for bucket in ("symptom", "root_cause", "fix", "context")
+            for item in evidence_bundle.get(bucket, [])
+        ).lower()
+
+        for rule in FINE_GRAINED_RULES:
+            excluded_by = [
+                keyword for keyword in rule.get("exclude_keywords", [])
+                if keyword.lower() in all_positive_text
+            ]
+            if excluded_by:
+                excluded_candidates.append({
+                    "category": rule["name"],
+                    "excluded_by": excluded_by,
+                })
+                continue
+
+            field_hits: dict[str, list[str]] = defaultdict(list)
+            negative_hits: dict[str, list[str]] = defaultdict(list)
+            matched_keywords: list[str] = []
+            score = 0.0
+
+            for bucket, sign in (("symptom", 1), ("root_cause", 1), ("fix", 1), ("context", 1), ("negative", -1)):
+                for item in evidence_bundle.get(bucket, []):
+                    text_lower = item["text"].lower()
+                    source_field = item["source_field"]
+                    field_weight = float(item.get("weight", 1.0))
+                    for strength, keyword_weight in (("strong", 3), ("medium", 2), ("weak", 1)):
+                        for keyword in rule["keywords"].get(strength, []):
+                            if keyword.lower() not in text_lower:
+                                continue
+                            delta = field_weight * keyword_weight * sign
+                            score += delta
+                            if sign > 0:
+                                field_hits[source_field].append(keyword)
+                                matched_keywords.append(keyword)
+                            else:
+                                negative_hits[source_field].append(keyword)
+
+            score = round(score, 2)
+            if score <= 0:
+                continue
+
+            top_candidates.append({
+                "category": rule["name"],
+                "score": score,
+                "field_hits": {key: sorted(set(value)) for key, value in field_hits.items()},
+                "negative_hits": {key: sorted(set(value)) for key, value in negative_hits.items()},
+                "matched_keywords": sorted(set(matched_keywords)),
+                "excluded_by": [],
+                "priority": rule["priority"],
+            })
+
+        top_candidates.sort(key=lambda item: (item["score"], item.get("priority", 0)), reverse=True)
+        final_candidate = top_candidates[0]["category"] if top_candidates else FALLBACK_CATEGORY
+        confidence = self._estimate_candidate_confidence(top_candidates)
+        needs_llm_review = (
+            final_candidate == FALLBACK_CATEGORY
+            or confidence < 0.6
+            or (len(top_candidates) >= 2 and (top_candidates[0]["score"] - top_candidates[1]["score"] <= 1.5))
+        )
+
+        return {
+            "final_candidate": final_candidate,
+            "confidence": confidence,
+            "top_candidates": top_candidates[:5],
+            "excluded_candidates": excluded_candidates[:5],
+            "needs_llm_review": needs_llm_review,
+        }
+
+    def _estimate_candidate_confidence(self, top_candidates: list[dict[str, Any]]) -> float:
+        if not top_candidates:
+            return 0.0
+        best = float(top_candidates[0]["score"])
+        second = float(top_candidates[1]["score"]) if len(top_candidates) > 1 else 0.0
+        if best <= 0:
+            return 0.0
+        confidence = best / (best + second + 1.0)
+        return round(min(0.99, confidence), 2)
+
+    def _section_for_category(self, category: str) -> str:
+        for rule in FINE_GRAINED_RULES:
+            if rule["name"] == category:
+                return rule.get("section", FALLBACK_SECTION)
+        return FALLBACK_SECTION
+
+    def _split_evidence_fragments(self, text: str) -> list[str]:
+        cleaned = self._strip_noise_lines(text)
+        fragments = re.split(r"[\n；;。]+", cleaned)
+        return [fragment.strip() for fragment in fragments if fragment and fragment.strip()]
+
+    def _strip_noise_lines(self, text: str) -> str:
+        if not text:
+            return ""
+        cleaned_lines: list[str] = []
+        for raw_line in str(text).splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            lower = line.lower()
+            if (
+                re.search(r"uid[a-z0-9]+", lower)
+                or "创建时间" in line
+                or "修改时间" in line
+                or line.startswith("log路径")
+                or lower.startswith("thanks")
+                or line.startswith("\\\\")
+                or "desaysv.com" in lower
+                or "hzhhnnas01" in lower
+            ):
+                continue
+            cleaned_lines.append(line)
+        return "\n".join(cleaned_lines)
+
+    def _infer_evidence_bucket(self, text: str, default_bucket: str) -> str:
+        text_lower = text.lower()
+        negative_patterns = ["没有发现", "未发现", "无异常", "排除", "不是", "非", "not ", "no "]
+        root_cause_patterns = ["根因", "原因", "导致", "引起", "系", "定位", "分析", "确认"]
+        fix_patterns = ["修复", "解决", "优化", "修改", "增加", "patch", "方案", "对策"]
+        symptom_patterns = ["黑屏", "花屏", "闪屏", "重启", "卡死", "无声", "异常", "问题"]
+
+        if any(pattern in text_lower for pattern in negative_patterns):
+            return "negative"
+        if any(pattern in text_lower for pattern in fix_patterns):
+            return "fix"
+        if any(pattern in text_lower for pattern in root_cause_patterns):
+            return "root_cause"
+        if any(keyword in text_lower for keyword in ("高通", "qualcomm", "vendor", "供应商")):
+            return "root_cause"
+        if any(pattern in text_lower for pattern in symptom_patterns):
+            return "symptom"
+        return default_bucket
+
+    def _deduplicate_evidence_items(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        merged: dict[tuple[str, str], dict[str, Any]] = {}
+        for item in items:
+            key = (item["source_field"], item["text"])
+            current = merged.get(key)
+            if current is None or item.get("weight", 0) > current.get("weight", 0):
+                merged[key] = item
+        return list(merged.values())
 
     def _classify_fix_status(self, record: dict, mapping: dict, text: str) -> str:
         """判断修复状态（新增 Analysis/Confirm 特殊处理）"""
@@ -459,35 +684,109 @@ class ExcelIssueTool(BaseTool):
         kb_path.write_text(_json.dumps(kb, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"[知识库] 已回写 {written} 条 Bug 分类记录到 {tracking_file}")
 
+    def _annotate_incremental_status(self, records: list[dict], mapping: dict,
+                                     tracking_file: str) -> None:
+        """在写回知识库前，根据既有 KB 标记 new / changed / skipped。"""
+        import json as _json
+        force_full = os.getenv("FORCE_FULL_RUN") == "1"
+
+        if force_full:
+            for record in records:
+                record["_incremental_status"] = "new"
+            return
+
+        kb_path = Path(tracking_file)
+        existing_bugs: dict[str, dict[str, Any]] = {}
+        if kb_path.exists():
+            try:
+                existing_bugs = (_json.loads(kb_path.read_text(encoding="utf-8")) or {}).get("bugs", {})
+            except (_json.JSONDecodeError, OSError, AttributeError):
+                existing_bugs = {}
+
+        for record in records:
+            bug_id = self._value(record, mapping.get("bug_id"))
+            current_status = self._value(record, mapping.get("status")).strip().lower()
+            if not bug_id:
+                record["_incremental_status"] = "new"
+                continue
+
+            existing = existing_bugs.get(bug_id)
+            if not existing:
+                record["_incremental_status"] = "new"
+                continue
+
+            old_status = str(existing.get("status", "")).strip().lower()
+            record["_incremental_status"] = "changed" if old_status != current_status else "skipped"
+
     def _write_classification_json(self, records: list[dict], mapping: dict,
                                     json_path: str) -> None:
         """输出结构化分类数据 JSON，供下游 Agent 精确引用"""
         import json as _json
 
-        bugs = []
+        items = []
         for record in records:
             bug_id = self._value(record, mapping.get("bug_id"))
             if not bug_id:
                 continue
-            bugs.append({
+            project_value = os.environ.get("PROJECT_SCHEMA", "").strip() or self._value(record, mapping.get("project"))
+            incremental_status = record.get("_incremental_status", "")
+            items.append({
                 "bug_id": bug_id,
+                "project": project_value,
+                "incremental_status": incremental_status,
                 "title": self._value(record, mapping.get("title")),
                 "status": self._value(record, mapping.get("status")),
                 "severity": self._value(record, mapping.get("severity")),
                 "module": self._value(record, mapping.get("module")),
-                "root_cause_category": record.get("_root_cause_category", ""),
-                "fix_status": record.get("_fix_status", ""),
-                "score": record.get("_root_cause_score", "0"),
-                "matched_keywords": record.get("_root_cause_matched", ""),
-                "parsed_root_cause": record.get("_parsed_root_cause", ""),
-                "parsed_fix_method": record.get("_parsed_fix_method", ""),
-                "comments": (self._value(record, mapping.get("comments")) or "")[:300],
+                "raw_fields": {
+                    "title": self._value(record, mapping.get("title")),
+                    "comments": self._value(record, mapping.get("comments")),
+                    "root_cause": self._value(record, mapping.get("root_cause")),
+                    "fix_method": self._value(record, mapping.get("fix_method")),
+                    "solved_scheme": self._value(record, mapping.get("solved_scheme")),
+                    "status": self._value(record, mapping.get("status")),
+                    "severity": self._value(record, mapping.get("severity")),
+                    "module": self._value(record, mapping.get("module")),
+                },
+                "evidence": record.get("_evidence_bundle", {
+                    "symptom": [],
+                    "root_cause": [],
+                    "fix": [],
+                    "context": [],
+                    "negative": [],
+                }),
+                "rule_engine": record.get("_rule_candidates", {
+                    "final_candidate": record.get("_root_cause_category", FALLBACK_CATEGORY),
+                    "confidence": 0.0,
+                    "top_candidates": [],
+                    "excluded_candidates": [],
+                    "needs_llm_review": True,
+                }),
+                "final": {
+                    "root_cause_category": record.get("_root_cause_category", ""),
+                    "root_cause_section": record.get("_root_cause_section", ""),
+                    "fix_status": record.get("_fix_status", ""),
+                    "score": record.get("_root_cause_score", "0"),
+                    "matched_keywords": record.get("_root_cause_matched", ""),
+                    "parsed_root_cause": record.get("_parsed_root_cause", ""),
+                    "parsed_fix_method": record.get("_parsed_fix_method", ""),
+                    "llm_confidence": record.get("_llm_confidence", ""),
+                    "decision_reason": record.get("_decision_reason", ""),
+                },
             })
 
-        output = _json.dumps(bugs, ensure_ascii=False, indent=2)
+        payload = {
+            "meta": {
+                "version": "2.0",
+                "item_count": len(items),
+                "schema": "evidence-rule-engine-v2",
+            },
+            "items": items,
+        }
+        output = _json.dumps(payload, ensure_ascii=False, indent=2)
         Path(json_path).parent.mkdir(parents=True, exist_ok=True)
         Path(json_path).write_text(output, encoding="utf-8")
-        print(f"[JSON] 已输出 {len(bugs)} 条结构化分类数据到 {json_path}")
+        print(f"[JSON] 已输出 {len(items)} 条结构化分类数据到 {json_path}")
 
     # ========================================================
     # Comments 解析（保持原逻辑，增强 Solved Scheme 支持）
@@ -503,6 +802,8 @@ class ExcelIssueTool(BaseTool):
         """
         if not comments:
             return {"root_cause": "", "fix_method": ""}
+
+        comments = self._strip_noise_lines(comments)
 
         root_cause = ""
         fix_method = ""

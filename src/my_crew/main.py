@@ -14,6 +14,7 @@
 
 import json
 import os
+import subprocess
 import sys
 import warnings
 from datetime import datetime
@@ -151,6 +152,35 @@ def _filtered_inputs(excel_path: str | None = None, force: bool = False) -> tupl
     return inputs, (new_count == 0 and changed_count == 0)
 
 
+def _run_batched_llm_reclassify() -> None:
+    """主链分批 LLM 精校，避免单次超长上下文。"""
+    batch_size = int(os.getenv("LLM_RECLASSIFY_BATCH_SIZE", "20"))
+    timeout_s = int(os.getenv("LLM_RECLASSIFY_TIMEOUT_SECONDS", "1800"))
+    base = get_project_root()
+
+    print(f"\n>>> 分批 LLM 精校: --all --batch {batch_size}")
+    child_env = os.environ.copy()
+    child_env["PYTHONIOENCODING"] = "utf-8"
+    child_env["PYTHONUTF8"] = "1"
+
+    result = subprocess.run(
+        [
+            "uv", "run", "python", "scripts/llm_reclassify_manual.py",
+            "--all", "--batch", str(batch_size),
+        ],
+        cwd=base,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout_s,
+        env=child_env,
+    )
+    print(result.stdout)
+    if result.returncode != 0:
+        raise Exception(f"分批 LLM 精校失败: {result.stderr[:400]}")
+
+
 def run():
     """默认: 工作流一"""
     excel_path = sys.argv[1] if len(sys.argv) > 1 else None
@@ -159,7 +189,18 @@ def run():
         print("⏭️  无新增/变更 Bug，无需重新分析")
         return
     try:
-        MyCrew().refinement_crew().kickoff(inputs=inputs)
+        crew = MyCrew()
+        print(">>> Step 1/4 数据分析")
+        crew.analysis_only_crew().kickoff(inputs=inputs)
+
+        print("\n>>> Step 2/4 分批 LLM 精校")
+        _run_batched_llm_reclassify()
+
+        print("\n>>> Step 3/4 写入经验库")
+        crew.experience_only_crew().kickoff(inputs=inputs)
+
+        print("\n>>> Step 4/4 生成报告")
+        crew.report_only_crew().kickoff(inputs=inputs)
     except Exception as e:
         raise Exception(f"工作流一执行失败: {e}")
 
@@ -172,7 +213,18 @@ def refine():
         print("⏭️  无新增/变更 Bug，无需重新分析")
         return
     try:
-        MyCrew().refinement_crew().kickoff(inputs=inputs)
+        crew = MyCrew()
+        print(">>> Step 1/4 数据分析")
+        crew.analysis_only_crew().kickoff(inputs=inputs)
+
+        print("\n>>> Step 2/4 分批 LLM 精校")
+        _run_batched_llm_reclassify()
+
+        print("\n>>> Step 3/4 写入经验库")
+        crew.experience_only_crew().kickoff(inputs=inputs)
+
+        print("\n>>> Step 4/4 生成报告")
+        crew.report_only_crew().kickoff(inputs=inputs)
     except Exception as e:
         raise Exception(f"工作流一执行失败: {e}")
 

@@ -6,6 +6,7 @@ report_writer Agent 使用此工具将提炼出的设计经验写入服务器经
 """
 import os
 import json
+import time
 import requests
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
@@ -13,10 +14,15 @@ from typing import Optional, List
 
 DESIGN_API = os.getenv("EXPERIENCE_API_URL", "http://10.219.9.92:8765")
 API_KEY    = os.getenv("EXPERIENCE_API_KEY", "")
+PROJECT_NAME = os.getenv("PROJECT_NAME", "")
 TIMEOUT = 10
 
 def _headers():
     return {"X-API-Key": API_KEY} if API_KEY else {}
+
+
+def _red(msg: str) -> str:
+    return f"\033[31m{msg}\033[0m"
 
 
 # ─── 写入设计经验 ─────────────────────────────────────────────────────────────
@@ -58,10 +64,16 @@ class DesignLessonSaveTool(BaseTool):
         priority: str = "P2",
         source_bug_ids: List[str] = None,
     ) -> str:
+        fixed_project = (PROJECT_NAME or "").strip()
+        if not fixed_project:
+            return _red("[design_lesson_save] 写入失败: .env 未配置 PROJECT_NAME")
+        title_raw = (lesson_title or "").strip()
+        if not title_raw:
+            return _red("[design_lesson_save] 写入失败: lesson_title 为空")
         payload = {
-            "lesson_title": lesson_title,
+            "lesson_title": title_raw,
             "design_suggestion": design_suggestion,
-            "project": project,
+            "project": fixed_project,
             "version": version,
             "phenomenon": phenomenon,
             "root_cause": root_cause,
@@ -72,17 +84,68 @@ class DesignLessonSaveTool(BaseTool):
             "source_bug_ids": source_bug_ids or [],
         }
         try:
-            resp = requests.post(
+            resp = None
+            max_attempts = 3
+            for attempt in range(1, max_attempts + 1):
+                resp = requests.post(
+                    f"{DESIGN_API}/design-lessons",
+                    json=payload,
+                    headers=_headers(),
+                    timeout=TIMEOUT
+                )
+                if resp.status_code < 500 or attempt == max_attempts:
+                    break
+                time.sleep(0.5 * attempt)
+            try:
+                data = resp.json()
+            except ValueError:
+                data = None
+            if resp.status_code >= 400:
+                detail = data.get("detail") if isinstance(data, dict) else (resp.text or "unknown error")
+                return _red(f"[design_lesson_save] 写入失败: HTTP {resp.status_code} - {detail}")
+            if not isinstance(data, dict):
+                return _red(f"[design_lesson_save] 写入失败: 服务端返回非 JSON 响应: {resp.text[:200]}")
+            lesson_id = data.get("id")
+            if lesson_id is None:
+                return _red(f"[design_lesson_save] 写入失败: 服务端返回缺少 id 字段(HTTP {resp.status_code}): {data}")
+            schema = data.get("schema", "")
+            status = data.get("status", "")
+            # 写后回查：确保目标标题在固定 project 下可查询到
+            verify_resp = requests.get(
                 f"{DESIGN_API}/design-lessons",
-                json=payload,
+                params={"project": fixed_project, "limit": 500},
                 headers=_headers(),
                 timeout=TIMEOUT
             )
-            resp.raise_for_status()
-            data = resp.json()
-            return f"[design_lesson_save] 写入成功 id={data.get('id')} title={lesson_title}"
+            try:
+                verify_data = verify_resp.json()
+            except ValueError:
+                verify_data = None
+            if verify_resp.status_code >= 400:
+                detail = verify_data.get("detail") if isinstance(verify_data, dict) else (verify_resp.text or "unknown error")
+                return _red(
+                    "[design_lesson_save] 写入后校验失败: "
+                    f"HTTP {verify_resp.status_code} - {detail}; id={lesson_id}, schema={schema}, title={title_raw}"
+                )
+            if not isinstance(verify_data, dict):
+                return _red(
+                    "[design_lesson_save] 写入后校验失败: 服务端返回非 JSON; "
+                    f"id={lesson_id}, schema={schema}, title={title_raw}"
+                )
+            lessons = verify_data.get("lessons", []) or []
+            found = any((l.get("lesson_title") or "").strip() == title_raw for l in lessons if isinstance(l, dict))
+            if not found:
+                return _red(
+                    "[design_lesson_save] 写入后校验失败: 未在服务端列表中找到精确标题; "
+                    f"id={lesson_id}, schema={schema}, project={fixed_project}, title={title_raw}"
+                )
+            return (
+                "[design_lesson_save] 写入成功: "
+                f"id={lesson_id}, schema={schema}, status={status}, "
+                f"project={fixed_project}, priority={priority}, title={title_raw}"
+            )
         except requests.RequestException as e:
-            return f"[design_lesson_save] 写入失败: {e}"
+            return _red(f"[design_lesson_save] 写入失败: {e}")
 
 
 # ─── 查询设计经验（用于去重/参考） ──────────────────────────────────────────
@@ -110,6 +173,9 @@ class DesignLessonQueryTool(BaseTool):
         priority: str = "",
     ) -> str:
         try:
+            fixed_project = (PROJECT_NAME or "").strip()
+            if not fixed_project:
+                return _red("[design_lesson_query] 查询失败: .env 未配置 PROJECT_NAME")
             if keyword:
                 resp = requests.get(
                     f"{DESIGN_API}/design-lessons/search",
@@ -119,8 +185,7 @@ class DesignLessonQueryTool(BaseTool):
                 )
             else:
                 params = {}
-                if project:
-                    params["project"] = project
+                params["project"] = fixed_project
                 if arch_layer:
                     params["arch_layer"] = arch_layer
                 if priority:
@@ -148,4 +213,4 @@ class DesignLessonQueryTool(BaseTool):
                 )
             return "\n".join(lines)
         except requests.RequestException as e:
-            return f"[design_lesson_query] 查询失败: {e}"
+            return _red(f"[design_lesson_query] 查询失败: {e}")

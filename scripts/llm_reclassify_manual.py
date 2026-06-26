@@ -158,16 +158,48 @@ REVIEW_ALL_PROMPT = f"""你是一位车载座舱黑屏/卡死/闪屏问题分析
 （新分类建议列：现有分类可覆盖则留空，否则填建议名称，格式：领域-子类名）"""
 
 
-def load_data(path: Path) -> list[dict]:
+def _extract_category(item: dict) -> str:
+    return (
+        item.get("root_cause_category")
+        or item.get("final", {}).get("root_cause_category", "")
+    )
+
+
+def load_data(path: Path) -> tuple[list[dict], dict | None]:
     if not path.exists():
         print(f"[错误] 找不到 {path}")
         sys.exit(1)
     with open(path, encoding="utf-8") as f:
-        return json.load(f)
+        raw = json.load(f)
+
+    # 兼容旧格式: 直接是 list[bug]
+    if isinstance(raw, list):
+        return raw, None
+
+    # 兼容新格式: {"meta": {...}, "items": [...]}
+    if isinstance(raw, dict) and isinstance(raw.get("items"), list):
+        normalized: list[dict] = []
+        for item in raw["items"]:
+            normalized.append({
+                "bug_id": item.get("bug_id", ""),
+                "title": item.get("title", ""),
+                "comments": item.get("raw_fields", {}).get("comments", ""),
+                "parsed_root_cause": item.get("final", {}).get("parsed_root_cause", ""),
+                "matched_keywords": item.get("final", {}).get("matched_keywords", ""),
+                "root_cause_category": _extract_category(item),
+                "_ref": item,  # 指向原始 item，供回写更新
+            })
+        return normalized, raw
+
+    print(f"[错误] 不支持的 JSON 结构: {type(raw)}")
+    sys.exit(1)
 
 
-def save_json(path: Path, data: list[dict]):
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+def save_json(path: Path, data, container: dict | None = None):
+    if container is not None:
+        path.write_text(json.dumps(container, ensure_ascii=False, indent=2), encoding="utf-8")
+    else:
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def call_deepseek(batch: list[dict], batch_num: int, total_batches: int) -> str:
@@ -313,7 +345,7 @@ def parse_response(text: str, is_review: bool = False) -> dict[str, dict]:
 
 
 def update_classification_json(
-    all_bugs: list[dict], results: dict[str, dict]
+    all_bugs: list[dict], results: dict[str, dict], raw_container: dict | None = None
 ) -> tuple[int, int]:
     """更新 classification_data.json 中的 classification 结果
 
@@ -327,11 +359,17 @@ def update_classification_json(
             old_cat = bug.get("root_cause_category", "")
             new_cat = results[bid]["category"]
             bug["root_cause_category"] = new_cat
+            ref = bug.get("_ref")
+            if isinstance(ref, dict):
+                # 新格式优先写回 final.root_cause_category，同时兼容顶层字段
+                ref.setdefault("final", {})
+                ref["final"]["root_cause_category"] = new_cat
+                ref["root_cause_category"] = new_cat
             updated += 1
             if old_cat != new_cat and old_cat != new_cat:
                 changed += 1
 
-    save_json(JSON_PATH, all_bugs)
+    save_json(JSON_PATH, all_bugs, raw_container)
     return updated, changed
 
 
@@ -412,7 +450,7 @@ def main():
         sys.exit(1)
 
     print(f"🔍 读取 {JSON_PATH}...")
-    all_bugs = load_data(JSON_PATH)
+    all_bugs, raw_container = load_data(JSON_PATH)
 
     # 筛选 Bug
     if args.review_all:
@@ -561,7 +599,7 @@ def main():
 
     # 写回 classification_data.json
     print(f"\n💾 更新 {JSON_PATH}...")
-    updated, changed = update_classification_json(all_bugs, all_results)
+    updated, changed = update_classification_json(all_bugs, all_results, raw_container)
     print(f"   ✅ 已更新 {updated} 条，其中分类变更 {changed} 条")
 
     # 写回 KB
@@ -569,7 +607,7 @@ def main():
     update_kb(all_results)
 
     # 打印最终分布
-    full_after = load_data(JSON_PATH)
+    full_after, _ = load_data(JSON_PATH)
     initial_manual = sum(1 for b in all_bugs if b.get("root_cause_category") == "需人工判断")
     final_manual = sum(1 for b in full_after if b.get("root_cause_category") == "需人工判断")
     print(f"\n{'='*50}")

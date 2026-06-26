@@ -12,7 +12,7 @@ from my_crew.tools.bug_knowledge_tool import BugKnowledgeTool
 from my_crew.tools.log_download_tool import LogDownloadTool
 from my_crew.tools.experience_knowledge_tool import ExperienceMatchTool, ExperienceUpdateTool
 from my_crew.tools.design_lesson_tool import DesignLessonSaveTool, DesignLessonQueryTool
-from my_crew.tools.no_log_scan_tool import NoLogScanTool
+from my_crew.tools.read_tool import ReadTool
 
 
 @CrewBase
@@ -34,11 +34,12 @@ class MyCrew:
 
     def llm(self) -> LLM:
         return LLM(
-            model=getenv("ANTHROPIC_MODEL", "Qwen3.6-35B"),
+            model=getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
             provider="anthropic",
-            api_key=getenv("ANTHROPIC_API_TOKEN"),
-            base_url=getenv("ANTHROPIC_BASE_URL"),
+            api_key=getenv("DEEPSEEK_ANTHROPIC_API_KEY"),
+            base_url=getenv("DEEPSEEK_ANTHROPIC_BASE_URL"),
             timeout=int(getenv("ANTHROPIC_TIMEOUT_SECONDS", "600")),
+            max_tokens=int(getenv("ANTHROPIC_MAX_TOKENS", "1000000")),
         )
 
     # ── 工作流一 Agents ──
@@ -53,20 +54,11 @@ class MyCrew:
         )
 
     @agent
-    def no_log_auditor(self) -> Agent:
-        return Agent(
-            config=self.agents_config["no_log_auditor"],
-            llm=self.llm(),
-            tools=[NoLogScanTool()],
-            verbose=True,
-        )
-
-    @agent
     def issue_refiner(self) -> Agent:
         return Agent(
             config=self.agents_config["issue_refiner"],
             llm=self.llm(),
-            tools=[ExperienceMatchTool()],  # 只查不写，写入由 experience_saver 负责
+            tools=[ExperienceMatchTool(), ReadTool()],  # 只查不写，写入由 experience_saver 负责
             verbose=True,
         )
 
@@ -75,7 +67,7 @@ class MyCrew:
         return Agent(
             config=self.agents_config["experience_saver"],
             llm=self.llm(),
-            tools=[ExperienceUpdateTool()],
+            tools=[ReadTool(), ExperienceUpdateTool()],  # 需要读取 classification_data.json，禁止模拟数据
             verbose=True,
         )
 
@@ -85,6 +77,7 @@ class MyCrew:
             config=self.agents_config["report_writer"],
             llm=self.llm(),
             tools=[
+                ReadTool(),              # 读取中间文件，避免模型虚构 read 工具
                 ExperienceMatchTool(),
                 DesignLessonQueryTool(),   # 写入前先查重
                 DesignLessonSaveTool(),    # 写入设计经验库
@@ -140,13 +133,6 @@ class MyCrew:
     @task
     def data_analysis_task(self) -> Task:
         return Task(config=self.tasks_config["data_analysis_task"])
-
-    @task
-    def no_log_audit_task(self) -> Task:
-        return Task(
-            config=self.tasks_config["no_log_audit_task"],
-            output_file="outputs/no_log_report.md",
-        )
 
     @task
     def issue_refinement_task(self) -> Task:
@@ -206,10 +192,35 @@ class MyCrew:
     def refinement_crew(self) -> Crew:
         """工作流一: 问题分析提炼"""
         return Crew(
-            agents=[self.data_analyst(), self.no_log_auditor(),
-                    self.issue_refiner(), self.experience_saver(), self.report_writer()],
-            tasks=[self.data_analysis_task(), self.no_log_audit_task(),
-                   self.issue_refinement_task(), self.experience_save_task(), self.report_task()],
+            agents=[self.data_analyst(), self.issue_refiner(), self.experience_saver(), self.report_writer()],
+            tasks=[self.data_analysis_task(), self.issue_refinement_task(), self.experience_save_task(), self.report_task()],
+            process=Process.sequential,
+            verbose=True,
+        )
+
+    def analysis_only_crew(self) -> Crew:
+        """仅执行数据分析，生成 classification_data.json"""
+        return Crew(
+            agents=[self.data_analyst()],
+            tasks=[self.data_analysis_task()],
+            process=Process.sequential,
+            verbose=True,
+        )
+
+    def experience_only_crew(self) -> Crew:
+        """仅执行经验库写入"""
+        return Crew(
+            agents=[self.experience_saver()],
+            tasks=[self.experience_save_task()],
+            process=Process.sequential,
+            verbose=True,
+        )
+
+    def report_only_crew(self) -> Crew:
+        """仅执行报告生成"""
+        return Crew(
+            agents=[self.report_writer()],
+            tasks=[self.report_task()],
             process=Process.sequential,
             verbose=True,
         )
